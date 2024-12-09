@@ -75,28 +75,35 @@ class ChatManager:
             Optional[str]: 助手回复
         """
         try:
+            logger.debug(f"开始处理图片对话请求, 消息: {message}, 图片: {images}")
+            
             # 构建多模态消息
             content = [{
                 "type": "text",
                 "text": message
             }]
+            logger.debug(f"构建的多模态消息: {content}")
             
             # 添加用户消息
             self.add_message("user", content)
+            logger.debug(f"当前历史记录: {self.history}")
             
             # 发送请求
             response = self.client.chat_with_images(self.history, images)
+            logger.debug(f"收到响应: {response}")
             if response is None:
                 return None
             
             # 解析响应
             reply = self.client.parse_response(response)
+            logger.debug(f"解析后的回复: {reply}")
             if reply:
                 self.add_message("assistant", reply)
             return reply
             
         except Exception as e:
             logger.error(f"带图片的对话请求失败: {e}")
+            logger.exception(e)  # 添加详细的异常堆栈
             return None
             
     def analyze_requirement(self, content: str, images: Optional[List[str]] = None) -> Optional[str]:
@@ -109,6 +116,8 @@ class ChatManager:
         Returns:
             Optional[str]: 分析结果
         """
+        logger.info(f"开始分析需求: {content}")
+        logger.info(f"图片: {images}")
         try:
             # 渲染需求分析模板
             prompt = self.prompt_manager.render(
@@ -176,5 +185,5 @@ class ChatManager:
             return self.chat(prompt)
             
         except Exception as e:
-            logger.error(f"测试用例分析失败: {e}")
+            logger.error(f"测试用例分析��败: {e}")
             return None

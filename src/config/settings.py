@@ -6,13 +6,14 @@ class Settings(BaseSettings):
     
     # 智谱AI配置
     ZHIPU_API_KEY: str = ""
-    ZHIPU_MODEL: str = "glm-4v"  # 默认使用GLM-4V模型
+    ZHIPU_MODEL_CHAT: str = "glm-4-flash"  # 通用对话模型
+    ZHIPU_MODEL_VISION: str = "glm-4v-plus"  # 多模态模型
     
     # 日志配置
     LOG_LEVEL: str = "DEBUG"
     LOG_PATH: str = "logs"
     
-    # 文件路径配置
+    # 资源路径配置
     RESOURCE_PATH: str = "resources"
     
     model_config = ConfigDict(

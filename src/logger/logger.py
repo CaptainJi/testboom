@@ -1,12 +1,13 @@
 import sys
+import os
 from loguru import logger
 from pathlib import Path
 from ..config.config import settings
 
 def setup_logger():
     """配置日志"""
-    # 确保日志目录存在
-    log_path = Path(settings.LOG_PATH)
+    # 确保使用绝对路径
+    log_path = Path(os.path.abspath(settings.LOG_PATH))
     log_path.mkdir(exist_ok=True)
     
     # 移除默认的处理器

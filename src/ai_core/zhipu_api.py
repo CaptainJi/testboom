@@ -86,8 +86,11 @@ class ZhipuAI:
             智谱AI的原始响应
         """
         try:
-            # 将图片转换为base64编码
-            image_list = []
+            # 构建多模态消息
+            content = []
+            logger.debug(f"开始处理图片列表: {images}")
+            
+            # 添加图片内容
             for image_path in images:
                 if not os.path.exists(image_path):
                     logger.error(f"图片文件不存在: {image_path}")
@@ -95,23 +98,18 @@ class ZhipuAI:
                     
                 with open(image_path, "rb") as f:
                     base64_image = base64.b64encode(f.read()).decode('utf-8')
-                    image_list.append({
+                    logger.debug(f"图片 {image_path} 已转换为base64")
+                    content.append({
                         "type": "image_url",
                         "image_url": {
-                            "url": base64_image
+                            "url": f"{base64_image}"
                         }
                     })
             
-            if not image_list:
-                logger.error("没有有效的图片文件")
-                return None
+            logger.debug(f"图片内容处理完成, 共 {len(content)} 个图片")
             
-            # 构建多模态消息
-            content = []
-            # 先添加图片
-            content.extend(image_list)
-            
-            # 再添加文本
+            # 添加文本内容
+            logger.debug("开始处理消息列表")
             for msg in messages:
                 if msg["role"] == "user":
                     if isinstance(msg["content"], str):
@@ -119,19 +117,28 @@ class ZhipuAI:
                             "type": "text",
                             "text": msg["content"]
                         })
+                        logger.debug("已添加文本消息")
                     elif isinstance(msg["content"], list):
-                        for item in msg["content"]:
-                            if item["type"] == "text":
-                                content.append(item)
+                        content.extend(msg["content"])
+                        logger.debug("已添加列表消息")
+            
+            if not content:
+                logger.error("没有有效的内容")
+                return None
             
             # 构建完整的消息列表
             langchain_messages = [HumanMessage(content=content)]
+            logger.debug("已构建完整的消息列表")
             
             # 使用多模态模型
+            logger.debug("开始调用智谱AI多模态模型")
             response = self.vision_model.invoke(langchain_messages)
+            logger.debug("已收到智谱AI响应")
             return response
+            
         except Exception as e:
             logger.error(f"智谱AI图片对话请求失败: {e}")
+            logger.exception(e)  # 添加详细的异常堆栈
             return None
     
     def parse_response(self, response: Any) -> Optional[str]:

@@ -24,6 +24,7 @@ wheels/
 venv/
 env/
 ENV/
+.venv/
 
 # IDE
 .idea/
@@ -36,7 +37,8 @@ ENV/
 logs/
 *.log
 test_data/
-resources/
+resources/*
+!resources/prompts/
 
 # 系统
 .DS_Store

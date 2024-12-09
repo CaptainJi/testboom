@@ -77,7 +77,7 @@ class ChatManager:
         try:
             logger.debug(f"开始处理图片对话请求, 消息: {message}, 图片: {images}")
             
-            # 构建多模态消息
+            # 构建多模��消息
             content = [{
                 "type": "text",
                 "text": message
@@ -106,12 +106,13 @@ class ChatManager:
             logger.exception(e)  # 添加详细的异常堆栈
             return None
             
-    def analyze_requirement(self, content: str, images: Optional[List[str]] = None) -> Optional[str]:
+    def analyze_requirement(self, content: str, images: Optional[List[str]] = None, template_name: str = "requirement_analysis") -> Optional[str]:
         """分析需求
         
         Args:
             content: 需求文档内容
             images: 可选的需求相关图片列表
+            template_name: 使用的模板名称，默认为requirement_analysis
             
         Returns:
             Optional[str]: 分析结果
@@ -121,7 +122,7 @@ class ChatManager:
         try:
             # 渲染需求分析模板
             prompt = self.prompt_manager.render(
-                template_name="requirement_analysis",
+                template_name=template_name,
                 content=content
             )
             if not prompt:
@@ -185,5 +186,5 @@ class ChatManager:
             return self.chat(prompt)
             
         except Exception as e:
-            logger.error(f"测试用例分析��败: {e}")
+            logger.error(f"测试用例分析失败: {e}")
             return None

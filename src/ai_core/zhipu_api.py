@@ -1,151 +1,174 @@
-from typing import List, Dict, Any, Optional
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+import base64
+import os
+import mimetypes
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Union
 from langchain_community.chat_models import ChatZhipuAI
-from ..config.config import settings
-from ..logger.logger import logger
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from src.config.settings import settings
+from src.logger.logger import logger
 
 class ZhipuAI:
-    """智谱AI API封装类(基于LangChain)"""
+    """智谱AI API封装(基于LangChain)"""
     
     def __init__(self):
         """初始化智谱AI客户端"""
-        self.llm = ChatZhipuAI(
-            api_key=settings.ZHIPUAI_API_KEY,
-            model_name="glm-4",  # 默认使用GLM-4模型
+        # 通用对话模型
+        self.chat_model = ChatZhipuAI(
+            api_key=settings.ZHIPU_API_KEY,
+            model_name=settings.ZHIPU_MODEL_CHAT,
             temperature=0.7,
-            top_p=0.95,
+            top_p=0.7,
             streaming=False
         )
-        self.llm_4v = ChatZhipuAI(
-            api_key=settings.ZHIPUAI_API_KEY,
-            model_name="glm-4v",  # 多模态模型
+        
+        # 多模态模型
+        self.vision_model = ChatZhipuAI(
+            api_key=settings.ZHIPU_API_KEY,
+            model_name=settings.ZHIPU_MODEL_VISION,
             temperature=0.7,
-            top_p=0.95,
+            top_p=0.7,
             streaming=False
         )
     
-    def _convert_messages(self, messages: List[Dict[str, str]]) -> List[Any]:
+    def _convert_messages(self, messages: List[Dict[str, Any]], include_images: bool = False) -> List[Any]:
         """转换消息格式
         
         Args:
             messages: 原始消息列表
+            include_images: 是否包含图片
             
         Returns:
             List[Any]: LangChain消息列表
         """
         langchain_messages = []
         for msg in messages:
+            role = msg["role"]
             content = msg["content"]
-            if msg["role"] == "system":
+            
+            if role == "system":
                 langchain_messages.append(SystemMessage(content=content))
-            elif msg["role"] == "user":
-                langchain_messages.append(HumanMessage(content=content))
-            elif msg["role"] == "assistant":
-                langchain_messages.append(AIMessage(content=content))
+            elif role == "user":
+                if isinstance(content, str):
+                    langchain_messages.append(HumanMessage(content=content))
+                else:
+                    # 多模态消息
+                    langchain_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                if isinstance(content, str):
+                    langchain_messages.append(AIMessage(content=content))
+                else:
+                    langchain_messages.append(AIMessage(content=content))
         return langchain_messages
     
-    def chat(self, messages: List[Dict[str, str]], model: Optional[str] = None) -> Dict[str, Any]:
+    def _get_image_mime_type(self, image_path: str) -> str:
+        """获取图片的MIME类型
+        
+        Args:
+            image_path: 图片文件路径
+            
+        Returns:
+            str: MIME类型
+        """
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if mime_type and mime_type.startswith('image/'):
+            return mime_type
+        return 'image/png'  # 默认使用PNG
+    
+    def chat(self, messages: List[Dict[str, Any]]) -> Optional[Any]:
         """发送对话请求
         
         Args:
             messages: 对话历史记录列表
-            model: 模型名称,默认使用实例化时指定的模型
             
         Returns:
-            Dict[str, Any]: API响应结果
+            智谱AI的原始响应
         """
         try:
-            # 选择合适的模型实例
-            llm = self.llm
-            if model == "glm-4v":
-                llm = self.llm_4v
-            elif model and model != self.llm.model_name:
-                llm = ChatZhipuAI(
-                    api_key=settings.ZHIPUAI_API_KEY,
-                    model_name=model,
-                    temperature=0.7,
-                    top_p=0.95,
-                    streaming=False
-                )
-            
             # 转换消息格式
             langchain_messages = self._convert_messages(messages)
             
-            # 发送请求
-            response = llm.invoke(langchain_messages)
+            # 使用通用对话模型
+            response = self.chat_model.invoke(langchain_messages)
             return response
-            
         except Exception as e:
-            logger.error(f"智谱AI API调用失败: {str(e)}")
-            raise
+            logger.error(f"智谱AI对话请求失败: {e}")
+            return None
     
-    def chat_with_images(self, messages: List[Dict[str, str]], 
-                        images: List[str], model: Optional[str] = None) -> Dict[str, Any]:
+    def chat_with_images(self, messages: List[Dict[str, Any]], images: List[str]) -> Optional[Any]:
         """发送带图片的对话请求
         
         Args:
             messages: 对话历史记录列表
-            images: 图片URL或Base64列表
-            model: 模型名称,默认使用实例化时指定的模型
+            images: 图片文件路径列表
             
         Returns:
-            Dict[str, Any]: API响应结果
+            智谱AI的原始响应
         """
         try:
-            # 使用GLM-4V模型
-            llm = self.llm_4v
+            # 将图片转换为base64编码
+            image_list = []
+            for image_path in images:
+                if not os.path.exists(image_path):
+                    logger.error(f"图片文件不存在: {image_path}")
+                    continue
+                    
+                with open(image_path, "rb") as f:
+                    base64_image = base64.b64encode(f.read()).decode('utf-8')
+                    image_list.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": base64_image
+                        }
+                    })
+            
+            if not image_list:
+                logger.error("没有有效的图片文件")
+                return None
             
             # 构建多模态消息
-            langchain_messages = []
-            for msg in messages[:-1]:  # 处理除最后一条外的消息
-                if msg["role"] == "system":
-                    langchain_messages.append(SystemMessage(content=msg["content"]))
-                elif msg["role"] == "user":
-                    langchain_messages.append(HumanMessage(content=msg["content"]))
-                elif msg["role"] == "assistant":
-                    langchain_messages.append(AIMessage(content=msg["content"]))
+            content = []
+            # 先添加图片
+            content.extend(image_list)
             
-            # 处理最后一条消息,添加图片
-            if messages:
-                last_msg = messages[-1]
-                if last_msg["role"] == "user":
-                    content = [{
-                        "type": "text",
-                        "text": last_msg["content"]
-                    }]
-                    for image in images:
+            # 再添加文本
+            for msg in messages:
+                if msg["role"] == "user":
+                    if isinstance(msg["content"], str):
                         content.append({
-                            "type": "image_url",
-                            "image_url": {"url": image}
+                            "type": "text",
+                            "text": msg["content"]
                         })
-                    langchain_messages.append(HumanMessage(content=content))
+                    elif isinstance(msg["content"], list):
+                        for item in msg["content"]:
+                            if item["type"] == "text":
+                                content.append(item)
             
-            # 发送请求
-            response = llm.invoke(langchain_messages)
+            # 构建完整的消息列表
+            langchain_messages = [HumanMessage(content=content)]
+            
+            # 使用多模态模型
+            response = self.vision_model.invoke(langchain_messages)
             return response
-            
         except Exception as e:
-            logger.error(f"智谱AI API带图片调用失败: {str(e)}")
-            raise
+            logger.error(f"智谱AI图片对话请求失败: {e}")
+            return None
     
-    @staticmethod
-    def parse_response(response: Any) -> Optional[str]:
-        """解析API响应
+    def parse_response(self, response: Any) -> Optional[str]:
+        """解析智谱AI的响应
         
         Args:
-            response: API响应结果
+            response: 智谱AI的原始响应
             
         Returns:
-            Optional[str]: 解析出的回复内容,失败返回None
+            解析后的回复文本
         """
         try:
-            if hasattr(response, 'content'):
+            if hasattr(response, "content"):
                 return response.content
             elif isinstance(response, str):
                 return response
-            else:
-                logger.error(f"API响应格式错误: {response}")
-                return None
+            return None
         except Exception as e:
-            logger.error(f"解析API响应失败: {str(e)}")
+            logger.error(f"解析智谱AI响应失败: {e}")
             return None

@@ -1,124 +1,180 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Union
 from .zhipu_api import ZhipuAI
-from ..logger.logger import logger
+from .prompt_template import PromptTemplate
+from src.logger.logger import logger
 
 class ChatManager:
     """对话管理器"""
     
     def __init__(self):
         """初始化对话管理器"""
-        self.zhipu_client = ZhipuAI()
-        self.history: List[Dict[str, str]] = []
-        self.max_history_length = 10  # 最大历史记录长度
+        self.client = ZhipuAI()
+        self.history: List[Dict[str, Union[str, List[Dict[str, Any]]]]] = []
+        self.prompt_manager = PromptTemplate()
     
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: Union[str, List[Dict[str, Any]]]):
         """添加消息到历史记录
         
         Args:
-            role: 角色(user/assistant)
-            content: 消息内容
+            role: 角色(user/assistant/system)
+            content: 消息内容,可以是字符串或多模态内容列表
         """
+        # 如果content是字符串,转换为标准格式
+        if isinstance(content, str):
+            if role == "user":
+                content = [{
+                    "type": "text",
+                    "text": content
+                }]
+        
         self.history.append({
             "role": role,
             "content": content
         })
-        
-        # 如果历史记录超过最大长度,删除最早的消息
-        if len(self.history) > self.max_history_length:
-            self.history.pop(0)
     
     def clear_history(self):
         """清空历史记录"""
         self.history = []
     
-    def chat(self, message: str, system_prompt: Optional[str] = None) -> Optional[str]:
+    def chat(self, message: str) -> Optional[str]:
         """发送对话请求
         
         Args:
-            message: 用户���息
-            system_prompt: 系统提示语
+            message: 用户消息
             
         Returns:
-            Optional[str]: AI回复内容
+            Optional[str]: 助手回复
         """
         try:
-            messages = []
-            
-            # 添加系统提示语
-            if system_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": system_prompt
-                })
-            
-            # 添加历史记录
-            messages.extend(self.history)
-            
-            # 添加当前消息
-            messages.append({
-                "role": "user",
-                "content": message
-            })
+            # 添加用户消息
+            self.add_message("user", message)
             
             # 发送请求
-            response = self.zhipu_client.chat(messages)
+            response = self.client.chat(self.history)
+            if response is None:
+                return None
             
             # 解析响应
-            reply = self.zhipu_client.parse_response(response)
+            reply = self.client.parse_response(response)
             if reply:
-                # 将对话记录添加到历史
-                self.add_message("user", message)
                 self.add_message("assistant", reply)
-                return reply
-            return None
+            return reply
             
         except Exception as e:
-            logger.error(f"对话请求失败: {str(e)}")
+            logger.error(f"对话请求失败: {e}")
             return None
     
-    def chat_with_images(self, message: str, images: List[str], 
-                        system_prompt: Optional[str] = None) -> Optional[str]:
+    def chat_with_images(self, message: str, images: List[str]) -> Optional[str]:
         """发送带图片的对话请求
         
         Args:
             message: 用户消息
-            images: 图片URL或Base64列表
-            system_prompt: 系统提示语
+            images: 图片文件路径列表
             
         Returns:
-            Optional[str]: AI回复内容
+            Optional[str]: 助手回复
         """
         try:
-            messages = []
+            # 构建多模态消息
+            content = [{
+                "type": "text",
+                "text": message
+            }]
             
-            # 添加系统提示语
-            if system_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": system_prompt
-                })
-            
-            # 添加历史记录
-            messages.extend(self.history)
-            
-            # 添加当前消息
-            messages.append({
-                "role": "user",
-                "content": message
-            })
+            # 添加用户消息
+            self.add_message("user", content)
             
             # 发送请求
-            response = self.zhipu_client.chat_with_images(messages, images)
+            response = self.client.chat_with_images(self.history, images)
+            if response is None:
+                return None
             
             # 解析响应
-            reply = self.zhipu_client.parse_response(response)
+            reply = self.client.parse_response(response)
             if reply:
-                # 将对话记录添加到历史
-                self.add_message("user", message)
                 self.add_message("assistant", reply)
-                return reply
-            return None
+            return reply
             
         except Exception as e:
-            logger.error(f"带��片的对话请求失败: {str(e)}")
+            logger.error(f"带图片的对话请求失败: {e}")
+            return None
+            
+    def analyze_requirement(self, content: str, images: Optional[List[str]] = None) -> Optional[str]:
+        """分析需求
+        
+        Args:
+            content: 需求文档内容
+            images: 可选的需求相关图片列表
+            
+        Returns:
+            Optional[str]: 分析结果
+        """
+        try:
+            # 渲染需求分析模板
+            prompt = self.prompt_manager.render(
+                template_name="requirement_analysis",
+                content=content
+            )
+            if not prompt:
+                logger.error("渲染需求分析模板失败")
+                return None
+                
+            # 根据是否有图片选择对话方式
+            if images:
+                return self.chat_with_images(prompt, images)
+            else:
+                return self.chat(prompt)
+                
+        except Exception as e:
+            logger.error(f"需求分析失败: {e}")
+            return None
+            
+    def generate_testcases(self, analysis_result: str) -> Optional[str]:
+        """生成测试用例
+        
+        Args:
+            analysis_result: 需求分析结果
+            
+        Returns:
+            Optional[str]: 生成的测试用例
+        """
+        try:
+            # 渲染测试用例生成模板
+            prompt = self.prompt_manager.render(
+                template_name="testcase_generation",
+                content=analysis_result
+            )
+            if not prompt:
+                logger.error("渲染测试用例生成模板失败")
+                return None
+                
+            return self.chat(prompt)
+            
+        except Exception as e:
+            logger.error(f"测试用例生成失败: {e}")
+            return None
+            
+    def analyze_testcases(self, testcases: str) -> Optional[str]:
+        """分析测试用例
+        
+        Args:
+            testcases: 测试用例内容
+            
+        Returns:
+            Optional[str]: 分析结果
+        """
+        try:
+            # 渲染测试用例理解模板
+            prompt = self.prompt_manager.render(
+                template_name="testcase_understanding",
+                content=testcases
+            )
+            if not prompt:
+                logger.error("渲染测试用例理解模板失败")
+                return None
+                
+            return self.chat(prompt)
+            
+        except Exception as e:
+            logger.error(f"测试用例分析失败: {e}")
             return None

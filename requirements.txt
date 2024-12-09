@@ -1,0 +1,7 @@
+pydantic>=2.5.2
+loguru>=0.7.2
+python-dotenv>=1.0.0
+zhipuai>=1.0.7
+langchain>=0.0.350
+pytest>=7.4.3
+openpyxl>=3.1.2

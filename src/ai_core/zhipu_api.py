@@ -1,7 +1,5 @@
 import base64
 import os
-import mimetypes
-from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from langchain_community.chat_models import ChatZhipuAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -31,49 +29,31 @@ class ZhipuAI:
             streaming=False
         )
     
-    def _convert_messages(self, messages: List[Dict[str, Any]], include_images: bool = False) -> List[Any]:
+    def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         """转换消息格式
         
         Args:
             messages: 原始消息列表
-            include_images: 是否包含图片
             
         Returns:
             List[Any]: LangChain消息列表
         """
+        message_map = {
+            "system": SystemMessage,
+            "user": HumanMessage,
+            "assistant": AIMessage
+        }
+        
         langchain_messages = []
         for msg in messages:
             role = msg["role"]
             content = msg["content"]
             
-            if role == "system":
-                langchain_messages.append(SystemMessage(content=content))
-            elif role == "user":
-                if isinstance(content, str):
-                    langchain_messages.append(HumanMessage(content=content))
-                else:
-                    # 多模态消息
-                    langchain_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                if isinstance(content, str):
-                    langchain_messages.append(AIMessage(content=content))
-                else:
-                    langchain_messages.append(AIMessage(content=content))
+            if role in message_map:
+                message_class = message_map[role]
+                langchain_messages.append(message_class(content=content))
+                
         return langchain_messages
-    
-    def _get_image_mime_type(self, image_path: str) -> str:
-        """获取图片的MIME类型
-        
-        Args:
-            image_path: 图片文件路径
-            
-        Returns:
-            str: MIME类型
-        """
-        mime_type, _ = mimetypes.guess_type(image_path)
-        if mime_type and mime_type.startswith('image/'):
-            return mime_type
-        return 'image/png'  # 默认使用PNG
     
     def chat(self, messages: List[Dict[str, Any]]) -> Optional[Any]:
         """发送对话请求

@@ -25,6 +25,9 @@ venv/
 env/
 ENV/
 .venv/
+.venv
+venv
+env
 
 # IDE
 .idea/
@@ -39,6 +42,7 @@ logs/
 test_data/
 resources/*
 !resources/prompts/
+output/
 
 # 系统
 .DS_Store

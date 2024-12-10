@@ -84,7 +84,7 @@ class DocAnalyzer:
             
             # 生成测试用例
             logger.info("\n开始生成测试用例...")
-            testcases = self.chat_manager.generate_testcases(summary)
+            testcases = self.chat_manager.generate_testcases(summary.content if hasattr(summary, 'content') else summary)
             if not testcases:
                 logger.error("生成测试用例失败")
                 return None
@@ -92,11 +92,11 @@ class DocAnalyzer:
             # 导出测试用例到Excel
             self._export_testcases_to_excel(testcases)
             
-            # 清���临时文件
+            # 清理临时文件
             self.file_processor.cleanup()
             
             return {
-                "summary": summary,
+                "summary": summary.content if hasattr(summary, 'content') else summary,
                 "testcases": testcases,
                 "details": details
             }

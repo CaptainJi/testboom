@@ -32,7 +32,8 @@ def test_prompt_template():
     )
     assert result is not None
     assert content in result
-    assert "|用例ID|所属模块|" in result
+    assert '"testcases": [' in result  # 验证JSON格式
+    assert '"id": "TC_001"' in result  # 验证用例ID格式
     logger.info(f"\n用例生成模板渲染结果:\n{result}")
     
     # 测试渲染测试用例理解模板

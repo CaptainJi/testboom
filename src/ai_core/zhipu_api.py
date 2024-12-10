@@ -1,5 +1,6 @@
 import base64
 import os
+import json
 from typing import List, Dict, Any, Optional, Union
 from langchain_community.chat_models import ChatZhipuAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -55,11 +56,12 @@ class ZhipuAI:
                 
         return langchain_messages
     
-    def chat(self, messages: List[Dict[str, Any]]) -> Optional[Any]:
+    def chat(self, messages: List[Dict[str, Any]], response_format: Optional[Dict[str, str]] = None) -> Optional[Any]:
         """发送对话请求
         
         Args:
             messages: 对话历史记录列表
+            response_format: 响应格式,如 {"type": "json_object"}
             
         Returns:
             智谱AI的原始响应
@@ -69,7 +71,11 @@ class ZhipuAI:
             langchain_messages = self._convert_messages(messages)
             
             # 使用通用对话模型
-            response = self.chat_model.invoke(langchain_messages)
+            kwargs = {}
+            if response_format:
+                kwargs["response_format"] = response_format
+            
+            response = self.chat_model.invoke(langchain_messages, **kwargs)
             return response
         except Exception as e:
             logger.error(f"智谱AI对话请求失败: {e}")
@@ -141,18 +147,25 @@ class ZhipuAI:
             logger.exception(e)  # 添加详细的异常堆栈
             return None
     
-    def parse_response(self, response: Any) -> Optional[str]:
+    def parse_response(self, response: Any) -> Optional[Union[str, Dict[str, Any]]]:
         """解析智谱AI的响应
         
         Args:
             response: 智谱AI的原始响应
             
         Returns:
-            解析后的回复文本
+            解析后的回复文本或JSON对象
         """
         try:
             if hasattr(response, "content"):
-                return response.content
+                content = response.content
+                # 尝试解析JSON
+                if isinstance(content, str) and content.startswith("{") and content.endswith("}"):
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        pass
+                return content
             elif isinstance(response, str):
                 return response
             return None

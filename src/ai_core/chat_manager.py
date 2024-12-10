@@ -2,6 +2,7 @@ from typing import List, Dict, Optional, Any, Union
 from .zhipu_api import ZhipuAI
 from .prompt_template import PromptTemplate
 from src.logger.logger import logger
+import json
 
 class ChatManager:
     """对话管理器"""
@@ -77,7 +78,7 @@ class ChatManager:
         try:
             logger.debug(f"开始处理图片对话请求, 消息: {message}, 图片: {images}")
             
-            # 构建多模��消息
+            # 多模态消息
             content = [{
                 "type": "text",
                 "text": message
@@ -106,59 +107,98 @@ class ChatManager:
             logger.exception(e)  # 添加详细的异常堆栈
             return None
             
-    def analyze_requirement(self, content: str, images: Optional[List[str]] = None, template_name: str = "requirement_analysis") -> Optional[str]:
+    def analyze_requirement(self, message: str, images: Optional[List[str]] = None, template_name: Optional[str] = None) -> Optional[str]:
         """分析需求
         
         Args:
-            content: 需求文档内容
-            images: 可选的需求相关图片列表
-            template_name: 使用的模板名称，默认为requirement_analysis
+            message: 需求文本
+            images: 可选的图片路径列表
+            template_name: 可选的模板名称
             
         Returns:
             Optional[str]: 分析结果
         """
-        logger.info(f"开始分析需求: {content}")
-        logger.info(f"图片: {images}")
         try:
-            # 渲染需求分析模板
-            prompt = self.prompt_manager.render(
-                template_name=template_name,
-                content=content
-            )
-            if not prompt:
-                logger.error("渲染需求分析模板失败")
-                return None
-                
-            # 根据是否有图片选择对话方式
+            if template_name:
+                # 使用指定模板
+                prompt = self.prompt_manager.render(
+                    template_name=template_name,
+                    content=message
+                )
+                if not prompt:
+                    logger.error("渲染模板失败")
+                    return None
+                message = prompt
+            
             if images:
-                return self.chat_with_images(prompt, images)
+                # 处理图片
+                logger.info(f"开始分析需求: {message}")
+                logger.info(f"图片: {images}")
+                return self.chat_with_images(message, images)
             else:
-                return self.chat(prompt)
-                
+                # 处理文本
+                logger.info(f"开始分析需求: {message}")
+                logger.info("图片: None")
+                return self.chat(message)
+            
         except Exception as e:
-            logger.error(f"需求分析失败: {e}")
+            logger.error(f"分析需求失败: {e}")
             return None
             
-    def generate_testcases(self, analysis_result: str) -> Optional[str]:
+    def generate_testcases(self, summary: str, details: Optional[Dict[str, Any]] = None) -> Optional[List[Dict[str, Any]]]:
         """生成测试用例
         
         Args:
-            analysis_result: 需求分析结果
+            summary: 需求汇总结果
+            details: 可选的详细分析结果
             
         Returns:
-            Optional[str]: 生成的测试用例
+            Optional[List[Dict[str, Any]]]: 生成的测试用例列表
         """
         try:
+            # 构建完整的输入内容
+            content = {
+                'summary': summary,
+                'details': details or {}
+            }
+            
             # 渲染测试用例生成模板
             prompt = self.prompt_manager.render(
                 template_name="testcase_generation",
-                content=analysis_result
+                content=json.dumps(content, ensure_ascii=False, indent=2)
             )
             if not prompt:
                 logger.error("渲染测试用例生成模板失败")
                 return None
                 
-            return self.chat(prompt)
+            # 添加用户消息
+            self.add_message("user", prompt)
+                
+            # 指定JSON输出格式
+            response = self.client.chat(self.history, response_format={"type": "json_object"})
+            if not response:
+                logger.error("生成测试用例失败")
+                return None
+                
+            # 打印原始响应
+            logger.info(f"\n大模型返回的原始响应:\n{response}")
+            
+            # 解析响应
+            result = self.client.parse_response(response)
+            logger.info(f"\n解析后的响应内容:\n{result}")
+            
+            if not result or not isinstance(result, dict):
+                logger.error("解析测试用例失败")
+                return None
+                
+            # 提取测试用例列表
+            testcases = result.get('testcases', [])
+            if not testcases:
+                logger.warning("未生成任何测试用例")
+                return []
+                
+            logger.info(f"成功生成 {len(testcases)} 个测试用例")
+            return testcases
             
         except Exception as e:
             logger.error(f"测试用例生成失败: {e}")

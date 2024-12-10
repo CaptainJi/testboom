@@ -2,7 +2,7 @@ import sys
 import os
 from loguru import logger
 from pathlib import Path
-from ..config.config import settings
+from ..config.settings import settings
 
 def setup_logger():
     """配置日志"""

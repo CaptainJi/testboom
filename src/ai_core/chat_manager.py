@@ -248,7 +248,7 @@ class ChatManager:
                 return None
                 
         except Exception as e:
-            logger.error(f"生成测试用例失败: {e}")
+            logger.error(f"生成测试用例失败: {str(e)}")
             return None
     
     def analyze_testcases(self, testcases: str) -> Optional[str]:

@@ -22,4 +22,4 @@ class Settings(BaseSettings):
         extra = "allow"  # 允许额外的配置项
     )
 
-settings = Settings() 
+settings = Settings()

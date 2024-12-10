@@ -33,7 +33,8 @@ class ZhipuAI:
         
         # 重试配置
         self.max_retries = 3
-        self.retry_delay = 1  # 秒
+        self.retry_delay = 5  # 增加重试间隔到5秒
+        self.retry_backoff = 2  # 重试间隔倍数
     
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         """转换消息格式
@@ -72,6 +73,8 @@ class ZhipuAI:
             智谱AI的原始响应
         """
         retries = 0
+        current_delay = self.retry_delay
+        
         while retries < self.max_retries:
             try:
                 # 转换消息格式
@@ -96,9 +99,12 @@ class ZhipuAI:
                 retries += 1
                 if retries < self.max_retries:
                     logger.warning(f"智谱AI对话请求失败，正在重试({retries}/{self.max_retries}): {e}")
-                    time.sleep(self.retry_delay)
+                    logger.warning(f"等待 {current_delay} 秒后重试...")
+                    time.sleep(current_delay)
+                    current_delay *= self.retry_backoff  # 增加下一次重试的等待时间
                 else:
                     logger.error(f"智谱AI对话请求失败，已达到最大重试次数: {e}")
+                    logger.exception(e)  # 添加详细的异常堆栈
                     return None
     
     def chat_with_images(self, messages: List[Dict[str, Any]], images: List[str]) -> Optional[Any]:
@@ -112,6 +118,8 @@ class ZhipuAI:
             智谱AI的原始响应
         """
         retries = 0
+        current_delay = self.retry_delay
+        
         while retries < self.max_retries:
             try:
                 # 构建多模态消息
@@ -124,15 +132,19 @@ class ZhipuAI:
                         logger.error(f"图片文件不存在: {image_path}")
                         continue
                         
-                    with open(image_path, "rb") as f:
-                        base64_image = base64.b64encode(f.read()).decode('utf-8')
-                        logger.debug(f"图片 {image_path} 已转换为base64")
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        })
+                    try:
+                        with open(image_path, "rb") as f:
+                            base64_image = base64.b64encode(f.read()).decode('utf-8')
+                            logger.debug(f"图片 {image_path} 已转换为base64")
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            })
+                    except Exception as e:
+                        logger.error(f"处理图片 {image_path} 失败: {e}")
+                        continue
                 
                 logger.debug(f"图片内容处理完成, 共 {len(content)} 个图片")
                 
@@ -168,10 +180,12 @@ class ZhipuAI:
                 retries += 1
                 if retries < self.max_retries:
                     logger.warning(f"智谱AI图片对话请求失败，正在重试({retries}/{self.max_retries}): {e}")
-                    time.sleep(self.retry_delay)
+                    logger.warning(f"等待 {current_delay} 秒后重试...")
+                    time.sleep(current_delay)
+                    current_delay *= self.retry_backoff  # 增加下一次重试的等待时间
                 else:
                     logger.error(f"智谱AI图片对话请求失败，已达到最大重试次数: {e}")
-                    logger.exception(e)
+                    logger.exception(e)  # 添加详细的异常堆栈
                     return None
     
     def parse_response(self, response: Any) -> Optional[Union[str, Dict[str, Any]]]:
@@ -190,18 +204,21 @@ class ZhipuAI:
                 if isinstance(content, str) and content.startswith("{") and content.endswith("}"):
                     try:
                         return json.loads(content)
-                    except json.JSONDecodeError:
-                        pass
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON解析失败: {e}")
+                        return content
                 return content
             elif isinstance(response, str):
                 # 尝试解析JSON字符串
                 if response.startswith("{") and response.endswith("}"):
                     try:
                         return json.loads(response)
-                    except json.JSONDecodeError:
-                        pass
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON解析失败: {e}")
+                        return response
                 return response
             return None
         except Exception as e:
             logger.error(f"解析智谱AI响应失败: {e}")
+            logger.exception(e)  # 添加详细的异常堆栈
             return None

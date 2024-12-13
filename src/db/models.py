@@ -20,6 +20,7 @@ class TestCase(Base):
     """测试用例模型"""
     
     # 基本信息
+    project: Mapped[str] = mapped_column(String(100))
     module: Mapped[str] = mapped_column(String(100))
     name: Mapped[str] = mapped_column(String(255))
     level: Mapped[str] = mapped_column(String(10))

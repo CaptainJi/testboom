@@ -255,26 +255,20 @@ class ChatManager:
         """分析测试用例
         
         Args:
-            testcases: 测试用例内容
+            testcases: 测试用例文本
             
         Returns:
             Optional[str]: 分析结果，如果出错则返回None
-            
-        功能：
-        - 使用模板生成用例分析提示词
-        - 分析用例的覆盖情况
-        - 提供改进建议
         """
         try:
-            # 渲染测试用例分析模板
+            # 渲染分析模板
             prompt = self.template.render(
-                template_name="testcase_understanding",
+                template_name="testcase_analysis",
                 content=testcases
             )
             if not prompt:
                 return None
-                
-            # 调用AI分析测试用例
+            
             return self.chat(prompt)
             
         except Exception as e:

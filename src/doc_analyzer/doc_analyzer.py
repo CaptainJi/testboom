@@ -230,28 +230,25 @@ class DocAnalyzer:
                 'exceptions': []
             }
     
-    def _export_testcases_to_excel(self, testcases: List[Dict[str, Any]]):
+    def _export_testcases_to_excel(self, testcases: List[Dict[str, Any]], output_path: str):
         """导出测试用例到Excel
         
         Args:
             testcases: 测试用例列表
+            output_path: 输出文件路径
         """
         try:
-            # 确保输出目录存在
-            output_dir = Path("output")
-            output_dir.mkdir(exist_ok=True)
-            
             # 转换测试用例格式
             data = []
             for tc in testcases:
                 data.append({
-                    '用例ID': tc['id'],
-                    '所属模块': tc['module'],
-                    '用例名称': tc['name'],
-                    '用例等级': tc['level'],
-                    '前置条件': tc['precondition'],
-                    '测试步骤': '\n'.join(tc['steps']),
-                    '预期结果': '\n'.join(tc['expected']),
+                    '用例ID': tc.get('id', ''),
+                    '所属模块': tc.get('module', ''),
+                    '用例名称': tc.get('name', ''),
+                    '用例等级': tc.get('level', ''),
+                    '前置条件': tc.get('precondition', ''),
+                    '测试步骤': '\n'.join(tc.get('steps', [])),
+                    '预期结果': '\n'.join(tc.get('expected', [])),
                     '实际结果': tc.get('actual', ''),
                     '测试状态': tc.get('status', ''),
                     '备注': tc.get('remark', '')
@@ -261,10 +258,11 @@ class DocAnalyzer:
             df = pd.DataFrame(data)
             
             # 导出到Excel
-            excel_path = output_dir / "testcases.xlsx"
-            df.to_excel(excel_path, index=False)
-            logger.info(f"测试用例已导出到: {excel_path}")
+            df.to_excel(output_path, index=False, engine='openpyxl')
+            
+            logger.info(f"测试用例已导出到: {output_path}")
             
         except Exception as e:
-            logger.error(f"导出测试用例到Excel失败: {e}")
+            logger.error(f"导出测试用例失败: {e}")
             logger.exception(e)
+            raise

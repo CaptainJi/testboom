@@ -24,12 +24,20 @@ class CaseService:
     async def generate_cases_from_file(
         cls,
         file_id: str,
+        project_name: str,
         module_name: Optional[str],
         db: AsyncSession
     ) -> str:
         """从文件生成测试用例
         
-        返回任务ID，用于后续查询生成结果
+        Args:
+            file_id: 文件ID
+            project_name: 项目名称
+            module_name: 模块名称
+            db: 数据库会话
+            
+        Returns:
+            str: 任务ID
         """
         # 获取文件信息
         file = await FileService.get_file_by_id(file_id, db)
@@ -49,6 +57,7 @@ class CaseService:
                     task_id,
                     cls._generate_cases,
                     file,
+                    project_name,
                     module_name,
                     db
                 )
@@ -70,6 +79,7 @@ class CaseService:
     async def _generate_cases(
         cls,
         file: File,
+        project_name: str,
         module_name: Optional[str],
         db: AsyncSession
     ) -> List[Dict[str, Any]]:
@@ -85,9 +95,9 @@ class CaseService:
                 
                 # 根据文件类型处理
                 if file.type == "zip":
-                    cases = await cls._process_zip_file(file, module_name)
+                    cases = await cls._process_zip_file(file, project_name, module_name)
                 else:
-                    cases = await cls._process_image_file(file, module_name)
+                    cases = await cls._process_image_file(file, project_name, module_name)
                     
                 # 保存用例到数据库
                 case_infos = []
@@ -96,6 +106,7 @@ class CaseService:
                     session.add(case)
                     case_infos.append({
                         'id': case.id,
+                        'project': project_name,
                         'module': case.module,
                         'name': case.name,
                         'level': case.level,
@@ -124,6 +135,7 @@ class CaseService:
     async def _process_zip_file(
         cls,
         file: File,
+        project_name: str,
         module_name: Optional[str]
     ) -> List[TestCase]:
         """处理ZIP文件"""
@@ -176,6 +188,7 @@ class CaseService:
             # 转换为TestCase对象
             for case_data in testcases:
                 case = TestCase(
+                    project=project_name,
                     module=module_name or case_data.get('module', '默认模块'),
                     name=case_data.get('name', '未命名用例'),
                     level=case_data.get('level', 'P2'),
@@ -196,6 +209,7 @@ class CaseService:
     async def _process_image_file(
         cls,
         file: File,
+        project_name: str,
         module_name: Optional[str]
     ) -> List[TestCase]:
         """处理图片文件"""
@@ -231,6 +245,7 @@ class CaseService:
         cases = []
         for case_data in testcases:
             case = TestCase(
+                project=project_name,
                 module=module_name or case_data.get('module', '默认模块'),
                 name=case_data.get('name', '未命名用例'),
                 level=case_data.get('level', 'P2'),
@@ -257,16 +272,58 @@ class CaseService:
     async def list_cases(
         cls,
         db: AsyncSession,
+        project: Optional[str] = None,
         module: Optional[str] = None,
         level: Optional[str] = None
     ) -> List[TestCase]:
-        """获取用例列表"""
-        query = select(TestCase)
+        """获取用例列表
         
-        if module:
-            query = query.where(TestCase.module == module)
-        if level:
-            query = query.where(TestCase.level == level)
+        Args:
+            db: 数据库会话
+            project: 项目名称
+            module: 模块名称
+            level: 用例等级
             
-        result = await db.execute(query)
-        return result.scalars().all() 
+        Returns:
+            List[TestCase]: 用例列表
+        """
+        try:
+            # 构建基础查询
+            query = select(TestCase)
+            
+            # 添加查询条件
+            conditions = []
+            
+            if project:
+                # 记录查询条件
+                logger.info(f"查询项目: {project}")
+                # 使用 project 字段查询
+                conditions.append(TestCase.project == project)
+                
+            if module:
+                logger.info(f"查询模块: {module}")
+                conditions.append(TestCase.module == module)
+                
+            if level:
+                logger.info(f"查询等级: {level}")
+                conditions.append(TestCase.level == level)
+                
+            # 组合所有条件
+            if conditions:
+                query = query.where(*conditions)
+                
+            # 执行查询
+            result = await db.execute(query)
+            cases = result.scalars().all()
+            
+            # 记录查询结果
+            logger.info(f"查询到 {len(cases)} 条用例")
+            for case in cases:
+                logger.debug(f"用例内容: {case.content}")
+                
+            return cases
+            
+        except Exception as e:
+            logger.error(f"查询用例失败: {str(e)}")
+            return []
+    

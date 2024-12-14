@@ -8,6 +8,7 @@ from loguru import logger
 from src.api.middlewares.logger import LoggerMiddleware
 from src.api.models.base import ResponseModel
 from src.api.routers import case, file
+from src.api.services.file import FileService
 from src.db import init_db
 import os
 
@@ -99,6 +100,11 @@ async def startup_event():
     # 初始化数据库
     await init_db()
     logger.info("Database initialized")
+    
+    # 初始化目录
+    os.makedirs(FileService.UPLOAD_DIR, exist_ok=True)
+    os.makedirs(FileService.TEMP_DIR, exist_ok=True)
+    logger.info(f"目录初始化完成: {FileService.UPLOAD_DIR}, {FileService.TEMP_DIR}")
 
 if __name__ == "__main__":
     # 标记为主进程

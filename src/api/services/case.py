@@ -95,7 +95,7 @@ class CaseService:
                 else:
                     cases = await cls._process_image_file(local_file_path, project_name, module_name)
                     
-                # 保存用例到��据库
+                # 保存用例到据库
                 case_infos = []
                 total_cases = len(cases)
                 
@@ -168,25 +168,19 @@ class CaseService:
     ) -> List[TestCase]:
         """处理ZIP文件"""
         cases = []
-        extract_path = os.path.join(os.path.dirname(file_path), "temp")
+        extract_path = os.path.join("data/temp", str(uuid.uuid4()))
         
         try:
             # 创建ChatManager实例
             chat_manager = ChatManager()
             
-            # 如果是URL，先下载到本地
-            if file_path.startswith(('http://', 'https://')):
-                storage_service = get_storage_service()
-                temp_dir = Path("storage/files/temp")
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                temp_zip = temp_dir / f"{uuid.uuid4()}.zip"
-                
-                # 下载ZIP文件
-                success = await storage_service.download_file(file_path, temp_zip)
-                if not success:
-                    raise ValueError("下载ZIP文件失败")
-                file_path = str(temp_zip)
-                
+            # 创建临时目录
+            os.makedirs(extract_path, exist_ok=True)
+            
+            # 确保使用本地文件路径
+            if not os.path.exists(file_path):
+                raise ValueError(f"文件不存在: {file_path}")
+            
             # 解压文件
             with zipfile.ZipFile(file_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
@@ -200,24 +194,6 @@ class CaseService:
                 
             if not image_files:
                 raise ValueError("ZIP文件中未找到图片")
-                
-            # 如果启用了对象存储，上传所有图片并获取URL
-            storage_service = get_storage_service()
-            if storage_service.enabled:
-                image_urls = []
-                for image_path in image_files:
-                    try:
-                        url = await storage_service.upload_file(image_path)
-                        if url:
-                            image_urls.append(url)
-                    except Exception as e:
-                        logger.error(f"上传图片到对象存储失败: {image_path}, 错误: {str(e)}")
-                        # 如果上传失败，使用base64编码
-                        with open(image_path, 'rb') as f:
-                            import base64
-                            content = base64.b64encode(f.read()).decode('utf-8')
-                            image_urls.append(content)
-                image_files = image_urls
             
             # 分析需求并生成用例
             summary = chat_manager.analyze_requirement(
@@ -261,9 +237,6 @@ class CaseService:
             if os.path.exists(extract_path):
                 import shutil
                 shutil.rmtree(extract_path)
-            # 如果下载了临时ZIP，也清理掉
-            if 'temp_zip' in locals():
-                temp_zip.unlink(missing_ok=True)
                 
         return cases
     
@@ -278,31 +251,14 @@ class CaseService:
         # 创建ChatManager实例
         chat_manager = ChatManager()
         
-        # 如果是URL，直接使用
-        if file_path.startswith(('http://', 'https://')):
-            image_path = file_path
-        else:
-            # 如果是本地文件且启用了对象存储，上传并获取URL
-            storage_service = get_storage_service()
-            if storage_service.enabled:
-                try:
-                    url = await storage_service.upload_file(file_path)
-                    if url:
-                        image_path = url
-                except Exception as e:
-                    logger.error(f"上传图片到对象存储失败: {file_path}, 错误: {str(e)}")
-                    # 如果上传失败，使用base64编码
-                    with open(file_path, 'rb') as f:
-                        import base64
-                        content = base64.b64encode(f.read()).decode('utf-8')
-                        image_path = content
-            else:
-                image_path = file_path
+        # 确保使用本地文件路径
+        if not os.path.exists(file_path):
+            raise ValueError(f"文件不存在: {file_path}")
         
         # 分析需求并生成用例
         summary = chat_manager.analyze_requirement(
             content=f"模块名称: {module_name}" if module_name else "",
-            image_paths=[image_path]
+            image_paths=[file_path]
         )
         
         if not summary:
@@ -428,6 +384,6 @@ class CaseService:
             return cases
             
         except Exception as e:
-            logger.error(f"查询���例失败: {str(e)}")
+            logger.error(f"查询用例失败: {str(e)}")
             return []
     

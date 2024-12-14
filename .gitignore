@@ -47,4 +47,5 @@ storage/files/*
 testboom.db
 # 系统
 .DS_Store
-Thumbs.db 
+Thumbs.db
+data/

@@ -39,59 +39,49 @@ class CaseService:
         Returns:
             str: 任务ID
         """
-        # 获取文件信息
-        file = await FileService.get_file_by_id(file_id, db)
-        if not file:
-            raise ValueError("文件不存在")
-            
-        # 更新文件状态为处理中
-        await FileService.update_file_status(file, "processing", db=db)
-        
-        # 创建任务
-        task_id = TaskManager.create_task("generate_cases")
-        
         try:
-            # 启动后台任务
-            asyncio.create_task(
-                TaskManager.run_background_task(
-                    task_id,
-                    cls._generate_cases,
-                    file,
-                    project_name,
-                    module_name,
-                    db
-                )
+            # 创建任务
+            task_id = TaskManager.create_task("generate_cases")
+            
+            # 启动后台任务，不等待
+            TaskManager.run_background_task(
+                task_id,
+                cls._generate_cases,
+                file_id,
+                project_name,
+                module_name
             )
             
             return task_id
             
         except Exception as e:
-            # 更新文件状态为失败
-            await FileService.update_file_status(
-                file,
-                "failed",
-                error=str(e),
-                db=db
-            )
+            logger.error(f"启动用例生成任务失败: {str(e)}")
+            if 'task_id' in locals():
+                TaskManager.update_task(
+                    task_id,
+                    status='failed',
+                    error=str(e)
+                )
             raise
-            
+    
     @classmethod
     async def _generate_cases(
         cls,
-        file: File,
+        file_id: str,
         project_name: str,
-        module_name: Optional[str],
-        db: AsyncSession
+        module_name: Optional[str]
     ) -> List[Dict[str, Any]]:
         """生成测试用例的具体实现"""
-        # 创建新的数据库会话
         async with AsyncSessionLocal() as session:
             try:
-                # 在新会话中获取文件对象
-                result = await session.execute(
-                    select(File).where(File.id == file.id)
-                )
-                file = result.scalar_one()
+                # 获取文件信息并更新状态
+                file = await FileService.get_file_by_id(file_id, session)
+                if not file:
+                    raise ValueError("文件不存在")
+                    
+                # 更新文件状态为处理中
+                await FileService.update_file_status(file, "processing", db=session)
+                await session.commit()  # 提交状态更新
                 
                 # 根据文件类型处理
                 if file.type == "zip":
@@ -101,43 +91,58 @@ class CaseService:
                     
                 # 保存用例到数据库
                 case_infos = []
-                for case in cases:
-                    case.file_id = file.id
-                    session.add(case)
-                    # 刷新以获取ID
+                total_cases = len(cases)
+                
+                # 分批处理用例
+                batch_size = 10
+                for i in range(0, total_cases, batch_size):
+                    batch = cases[i:i + batch_size]
+                    batch_infos = []
+                    
+                    for case in batch:
+                        case.file_id = file.id
+                        session.add(case)
+                    
+                    # 提交批次
                     await session.flush()
-                    await session.refresh(case)
                     
-                    # 记录调试信息
-                    logger.debug(f"生成用例: id={case.id}, project={project_name}, module={case.module}")
-                    
-                    # 构建用例内容
-                    case_content = json.loads(case.content)
-                    case_content['id'] = str(case.id)  # 确保content中也包含case_id
-                    case.content = json.dumps(case_content)  # 更新content
-                    
-                    case_infos.append({
-                        'id': str(case.id),  # 确保ID被转换为字符串
-                        'project': project_name,
-                        'module': case.module,
-                        'name': case.name,
-                        'level': case.level,
-                        'status': case.status,
-                        'content': case_content  # 使用更新后的content
-                    })
+                    # 处理批次结果
+                    for case in batch:
+                        await session.refresh(case)
+                        case_content = json.loads(case.content)
+                        case_content['id'] = str(case.id)
+                        case.content = json.dumps(case_content)
+                        
+                        case_info = {
+                            'id': str(case.id),
+                            'project': project_name,
+                            'module': case.module,
+                            'name': case.name,
+                            'level': case.level,
+                            'status': case.status,
+                            'content': case_content
+                        }
+                        batch_infos.append(case_info)
+                        
+                    # 更新进度
+                    progress = int((i + len(batch)) / total_cases * 90)
+                    for task_id, task in TaskManager._tasks.items():
+                        if task['type'] == 'generate_cases' and task['status'] == 'running':
+                            TaskManager.update_task(task_id, progress=progress)
+                            break
+                            
+                    case_infos.extend(batch_infos)
+                    await session.commit()  # 提交每个批次
                 
                 # 更新文件状态为完成
                 await FileService.update_file_status(file, "completed", db=session)
                 await session.commit()
                 
-                # 记录生成结果
                 logger.info(f"成功生成 {len(case_infos)} 条用例")
-                for case_info in case_infos:
-                    logger.debug(f"用例信息: {case_info}")
-                
                 return case_infos
                 
             except Exception as e:
+                logger.error(f"生成用例失败: {str(e)}")
                 # 更新文件状态为失败
                 await FileService.update_file_status(
                     file,
@@ -286,7 +291,7 @@ class CaseService:
             db: 数据库会话
             
         Returns:
-            Optional[TestCase]: 用例对象，如果不存在则返回None
+            Optional[TestCase]: 用例对象，如果不存在返回None
         """
         try:
             # 查询用例
@@ -314,7 +319,7 @@ class CaseService:
         module: Optional[str] = None,
         level: Optional[str] = None
     ) -> List[TestCase]:
-        """获取用例列表
+        """获取用例表
         
         Args:
             db: 数据库会话

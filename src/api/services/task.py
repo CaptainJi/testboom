@@ -3,12 +3,41 @@ from datetime import datetime
 import asyncio
 from loguru import logger
 import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 class TaskManager:
     """任务管理器"""
     
     # 存储任务信息
     _tasks: Dict[str, Dict[str, Any]] = {}
+    # 线程池
+    _executor = ThreadPoolExecutor(max_workers=3)
+    # 后台任务事件循环
+    _background_loop = None
+    # 后台线程
+    _background_thread = None
+    
+    @classmethod
+    def _ensure_background_loop(cls):
+        """确保后台事件循环存在并运行"""
+        if cls._background_loop is None:
+            def run_background_loop():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                cls._background_loop = loop
+                loop.run_forever()
+            
+            # 创建并启动后台线程
+            cls._background_thread = threading.Thread(
+                target=run_background_loop,
+                daemon=True
+            )
+            cls._background_thread.start()
+            
+            # 等待事件循环创建完成
+            while cls._background_loop is None:
+                pass
     
     @classmethod
     def create_task(cls, task_type: str) -> str:
@@ -74,35 +103,40 @@ class TaskManager:
         task['updated_at'] = datetime.utcnow()
     
     @classmethod
-    async def run_background_task(
+    def run_background_task(
         cls,
         task_id: str,
         coro,
         *args,
         **kwargs
     ) -> None:
-        """运行后台任务"""
-        try:
-            # 更新任务状态为运行中
-            cls.update_task(task_id, status='running', progress=0)
-            
-            # 执行任务
-            result = await coro(*args, **kwargs)
-            
-            # 更新任务状态为完成
-            cls.update_task(
-                task_id,
-                status='completed',
-                progress=100,
-                result=result
-            )
-            
-        except Exception as e:
-            # 更新任务状态为失败
-            logger.error(f"Task {task_id} failed: {str(e)}")
-            cls.update_task(
-                task_id,
-                status='failed',
-                error=str(e)
-            )
-            raise 
+        """运行后台任务，不使用await调用此方法"""
+        cls._ensure_background_loop()
+        
+        async def _run_task():
+            try:
+                # 更新任务状态为运行中
+                cls.update_task(task_id, status='running', progress=0)
+                
+                # 在线程池中执行协程
+                result = await coro(*args, **kwargs)
+                
+                # 更新任务状态为完成
+                cls.update_task(
+                    task_id,
+                    status='completed',
+                    progress=100,
+                    result=result
+                )
+                
+            except Exception as e:
+                # 更新任务状态为失败
+                logger.error(f"Task {task_id} failed: {str(e)}")
+                cls.update_task(
+                    task_id,
+                    status='failed',
+                    error=str(e)
+                )
+        
+        # 在后台事件循环中运行任务
+        asyncio.run_coroutine_threadsafe(_run_task(), cls._background_loop)

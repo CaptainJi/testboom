@@ -14,6 +14,8 @@ class ZhipuAI:
     def __init__(self):
         """初始化智谱AI客户端"""
         logger.info("初始化智谱AI客户端")
+        logger.info(f"配置的对话模型: {settings.ai.ZHIPU_MODEL_CHAT}")
+        logger.info(f"配置的视觉模型: {settings.ai.ZHIPU_MODEL_VISION}")
         
         # 通用对话模型
         self.chat_model = ChatZhipuAI(
@@ -32,6 +34,15 @@ class ZhipuAI:
             top_p=0.2,
             streaming=False
         )
+        
+        # 验证模型名称
+        if self.chat_model.model_name != settings.ai.ZHIPU_MODEL_CHAT:
+            logger.warning(f"对话模型名称不匹配: 期望 {settings.ai.ZHIPU_MODEL_CHAT}, 实际 {self.chat_model.model_name}")
+            self.chat_model.model_name = settings.ai.ZHIPU_MODEL_CHAT
+            
+        if self.vision_model.model_name != settings.ai.ZHIPU_MODEL_VISION:
+            logger.warning(f"视觉模型名称不匹配: 期望 {settings.ai.ZHIPU_MODEL_VISION}, 实际 {self.vision_model.model_name}")
+            self.vision_model.model_name = settings.ai.ZHIPU_MODEL_VISION
     
     @log_function_call(level="DEBUG")
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
@@ -75,7 +86,7 @@ class ZhipuAI:
         """发送对话请求
         
         Args:
-            messages: 对话历史��录列表
+            messages: 对话历史记录列表
             response_format: 响应格式,如 {"type": "json_object"}
             
         Returns:
@@ -111,7 +122,7 @@ class ZhipuAI:
         messages: List[Dict[str, Any]], 
         image_paths: List[str]
     ) -> Optional[str]:
-        """发送带图片的对��请求"""
+        """发送带图片的对话请求"""
         try:
             # 处理图片
             content = []

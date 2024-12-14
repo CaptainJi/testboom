@@ -14,8 +14,8 @@ class AIConfig(BaseSettings):
         default="",  # 允许空值，但会在使用时检查
         description="智谱AI API密钥"
     )
-    ZHIPU_MODEL_CHAT: str = Field("glm-4", description="对话模型名称")
-    ZHIPU_MODEL_VISION: str = Field("glm-4v", description="多模态模型名称")
+    ZHIPU_MODEL_CHAT: str = Field("glm-4-flash", description="对话模型名称")
+    ZHIPU_MODEL_VISION: str = Field("glm-4v-flash", description="多模态模型名称")
     MAX_TOKENS: int = Field(6000, description="最大token数")
     MAX_IMAGE_SIZE: int = Field(10 * 1024 * 1024, description="最大图片大小(bytes)")
     RETRY_COUNT: int = Field(3, description="重试次数")
@@ -23,19 +23,15 @@ class AIConfig(BaseSettings):
     RETRY_BACKOFF: float = Field(2.0, description="重试延迟倍数")
     
     model_config = ConfigDict(
-        env_prefix="AI_",
-        env_file=".env",
-        env_file_encoding="utf-8",
+        env_file="",  # 禁用环境变量文件
+        env_prefix="",  # 使用空字符串而不是 None
         extra="ignore",
         case_sensitive=True
     )
 
 class LogConfig(BaseSettings):
     """日志配置"""
-    LOG_LEVEL: str = Field(
-        default=os.getenv("LOG_LEVEL", "INFO").upper(),
-        description="日志级别"
-    )
+    LOG_LEVEL: str = Field("INFO", description="日志级别")
     LOG_FILE: str = Field(str(BASE_DIR / "logs/app.log"), description="日志文件路径")
     LOG_FORMAT: str = Field(
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
@@ -47,6 +43,13 @@ class LogConfig(BaseSettings):
     LOG_ROTATION: str = Field("500 MB", description="日志轮转大小")
     LOG_RETENTION: str = Field("10 days", description="日志保留时间")
     
+    model_config = ConfigDict(
+        env_file="",  # 禁用环境变量文件
+        env_prefix="",  # 使用空字符串而不是 None
+        extra="ignore",
+        case_sensitive=True
+    )
+    
     @field_validator("LOG_LEVEL")
     def validate_log_level(cls, v: str) -> str:
         """验证日志级别"""
@@ -57,14 +60,6 @@ class LogConfig(BaseSettings):
             warnings.warn(f"无效的日志级别: {v}，使用默认值: INFO")
             return "INFO"
         return v
-    
-    model_config = ConfigDict(
-        env_prefix="LOG_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        case_sensitive=True
-    )
 
 class DatabaseConfig(BaseSettings):
     """数据库配置"""
@@ -77,9 +72,8 @@ class DatabaseConfig(BaseSettings):
     DB_MAX_OVERFLOW: int = Field(10, description="最大溢出连接数")
     
     model_config = ConfigDict(
-        env_prefix="DB_",
-        env_file=".env",
-        env_file_encoding="utf-8",
+        env_file="",  # 禁用环境变量文件
+        env_prefix="",  # 使用空字符串而不是 None
         extra="ignore",
         case_sensitive=True
     )
@@ -103,10 +97,49 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
-        extra="ignore"
+        extra="ignore",
+        env_prefix=""  # 使用空字符串而不是 None
     )
     
     def __init__(self, **kwargs):
+        # 从 .env 文件加载配置
+        from dotenv import dotenv_values
+        
+        # 获取 .env 文件的绝对路径
+        env_path = BASE_DIR / ".env"
+        if not env_path.exists():
+            import warnings
+            warnings.warn(f".env 文件不存在: {env_path}")
+            env_config = {}
+        else:
+            # 直接读取 .env 文件
+            env_config = dotenv_values(env_path)
+            
+        # 更新配置
+        if env_config:
+            # 更新 AI 配置
+            ai_config = {k.replace('AI_', ''): v for k, v in env_config.items() if k.startswith('AI_')}
+            if ai_config:
+                kwargs['ai'] = AIConfig(**ai_config)
+            
+            # 更新日志配置
+            log_config = {k.replace('LOG_', ''): v for k, v in env_config.items() if k.startswith('LOG_')}
+            if log_config:
+                kwargs['log'] = LogConfig(**log_config)
+            
+            # 更新数据库配置
+            db_config = {k.replace('DB_', ''): v for k, v in env_config.items() if k.startswith('DB_')}
+            if db_config:
+                kwargs['db'] = DatabaseConfig(**db_config)
+            
+            # 更新基础配置
+            if 'APP_NAME' in env_config:
+                kwargs['APP_NAME'] = env_config['APP_NAME']
+            if 'APP_VERSION' in env_config:
+                kwargs['APP_VERSION'] = env_config['APP_VERSION']
+            if 'DEBUG' in env_config:
+                kwargs['DEBUG'] = env_config['DEBUG'].lower() == 'true'
+        
         super().__init__(**kwargs)
         self._init_directories()
         self._validate_api_key()
@@ -129,16 +162,27 @@ class Settings(BaseSettings):
         if not self.ai.ZHIPU_API_KEY:
             import warnings
             warnings.warn(
-                "ZHIPU_API_KEY 未设置！请在环境变量或 .env 文件中设置 AI_ZHIPU_API_KEY",
+                "ZHIPU_API_KEY 未设置！请在 .env 文件中设置 AI_ZHIPU_API_KEY",
                 RuntimeWarning
             )
     
     def _print_debug_info(self):
         """打印调试信息"""
         print("\n=== 配置加载信息 ===")
+        print(f"项目根目录: {self.BASE_DIR}")
         print(f"环境变量文件: {self.model_config.get('env_file', '未指定')}")
-        print(f"环境变量 LOG_LEVEL: {os.getenv('LOG_LEVEL', '未设置')}")
-        print(f"配置 LOG_LEVEL: {self.log.LOG_LEVEL}")
+        print(f"环境变量文件编码: {self.model_config.get('env_file_encoding', '未指定')}")
+        
+        # 日志配置
+        print("\n日志配置:")
+        print(f"配置文件 LOG_LEVEL: {self.log.LOG_LEVEL}")
+        
+        # AI配置
+        print("\nAI配置:")
+        print(f"配置文件 ZHIPU_MODEL_CHAT: {self.ai.ZHIPU_MODEL_CHAT}")
+        print(f"配置文件 ZHIPU_MODEL_VISION: {self.ai.ZHIPU_MODEL_VISION}")
+        
+        print("\n其他配置:")
         print(f"调试模式: {self.DEBUG}")
         print("===================\n")
 

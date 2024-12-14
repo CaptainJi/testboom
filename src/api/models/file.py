@@ -16,6 +16,7 @@ class FileInfo(FileBase):
     """文件信息模型"""
     id: str
     path: str
+    storage_url: Optional[str] = None
     error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -27,4 +28,13 @@ class FileStatus(BaseModel):
     """文件状态模型"""
     id: str
     status: str
-    error: Optional[str] = None 
+    storage_url: Optional[str] = None
+    error: Optional[str] = None
+
+class FileList(BaseModel):
+    """文件列表响应模型"""
+    total: int
+    items: List[FileInfo]
+    
+    class Config:
+        from_attributes = True 

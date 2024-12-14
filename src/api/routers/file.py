@@ -1,12 +1,43 @@
-from fastapi import APIRouter, UploadFile, File as FastAPIFile, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File as FastAPIFile, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.models.base import ResponseModel
-from src.api.models.file import FileInfo, FileStatus
+from src.api.models.file import FileInfo, FileStatus, FileList
 from src.api.services.file import FileService
 from src.db.session import get_db
 from loguru import logger
+from typing import Optional
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
+
+@router.get("/")
+async def get_files(
+    skip: int = Query(default=0, ge=0, description="跳过的记录数"),
+    limit: int = Query(default=10, ge=1, le=100, description="返回的最大记录数"),
+    status: Optional[str] = Query(default=None, description="文件状态过滤"),
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[FileList]:
+    """获取文件列表
+    
+    Args:
+        skip: 跳过的记录数
+        limit: 返回的最大记录数
+        status: 文件状态过滤
+        db: 数据库会话
+        
+    Returns:
+        ResponseModel[FileList]: 文件列表响应
+    """
+    try:
+        files, total = await FileService.get_files(db, skip, limit, status)
+        return ResponseModel(
+            data=FileList(
+                total=total,
+                items=[FileInfo.model_validate(file) for file in files]
+            )
+        )
+    except Exception as e:
+        logger.error(f"获取文件列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取文件列表失败")
 
 @router.post("/upload")
 async def upload_file(
@@ -43,6 +74,7 @@ async def get_file_status(
             data=FileStatus(
                 id=db_file.id,
                 status=db_file.status,
+                storage_url=db_file.storage_url,
                 error=db_file.error
             )
         )

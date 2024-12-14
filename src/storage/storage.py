@@ -6,6 +6,7 @@ import os
 import base64
 from src.config.settings import settings
 from src.logger.logger import logger
+import mimetypes
 
 class StorageService:
     """存储服务类，处理文件上传和管理"""
@@ -41,24 +42,28 @@ class StorageService:
         上传文件到对象存储
         
         Args:
-            file_path: 本地文件路径
+            file_path: 本��文件路径
             object_name: 对象存储中的文件名，如果不指定则使用文件名
             
         Returns:
             str: 文件的公共访问URL，如果存储服务未启用则返回None
         """
         if not self.enabled:
+            logger.info("存储服务未启用，跳过文件上传")
             return None
             
         try:
             file_path = Path(file_path)
             if not file_path.exists():
+                logger.error(f"文件不存在: {file_path}")
                 raise FileNotFoundError(f"文件不存在: {file_path}")
                 
             # 如果未指定object_name，使用文件名
             if not object_name:
                 object_name = file_path.name
                 
+            logger.info(f"开始上传文件: {file_path} -> {object_name}")
+            
             # 上传文件
             self.client.fput_object(
                 settings.storage.BUCKET_NAME,
@@ -69,10 +74,16 @@ class StorageService:
             # 构建公共访问URL
             url = f"{settings.storage.PUBLIC_URL}/{settings.storage.BUCKET_NAME}/{object_name}"
             logger.info(f"文件上传成功: {url}")
+            
+            # 记录存储详情
+            logger.debug(f"存储详情: bucket={settings.storage.BUCKET_NAME}, "
+                        f"object={object_name}, size={file_path.stat().st_size}, "
+                        f"content_type={mimetypes.guess_type(str(file_path))[0]}")
+            
             return url
             
         except Exception as e:
-            logger.error(f"文件上传失败: {str(e)}")
+            logger.error(f"文件上传失败: {str(e)}", exc_info=True)
             raise
     
     async def get_file_url(self, object_name: str) -> Optional[str]:

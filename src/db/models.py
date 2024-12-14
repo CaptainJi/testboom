@@ -10,6 +10,7 @@ class File(Base):
     name: Mapped[str] = mapped_column(String(255))
     type: Mapped[str] = mapped_column(String(50))  # zip/image
     path: Mapped[str] = mapped_column(String(255))
+    storage_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # 对象存储地址
     status: Mapped[str] = mapped_column(String(50))  # pending/processing/completed/failed
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     

@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import Optional
+from typing import Optional, List
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,6 +9,7 @@ from src.storage.storage import get_storage_service
 from loguru import logger
 import uuid
 from pathlib import Path
+from sqlalchemy import func
 
 class FileService:
     """文件服务"""
@@ -46,11 +47,23 @@ class FileService:
             logger.error(f"文件保存失败: {str(e)}")
             raise
             
+        # 上传到对象存储
+        storage_url = None
+        try:
+            storage_service = get_storage_service()
+            if storage_service.enabled:
+                storage_url = await storage_service.upload_file(file_path)
+                logger.info(f"文件已上传到对象存储: {storage_url}")
+        except Exception as e:
+            logger.error(f"文件上传到对象存储失败: {str(e)}")
+            # 这里我们不抛出异常，因为本地存储已经成功
+            
         # 创建文件记录
         db_file = File(
             name=file.filename,
             type="zip" if file_ext == ".zip" else "image",
             path=file_path,  # 使用本地文件路径
+            storage_url=storage_url,  # 记录对象存储URL
             status="pending"
         )
         
@@ -101,3 +114,44 @@ class FileService:
         """获取文件本地路径"""
         # 直接返回本地路径
         return file.path
+    
+    @classmethod
+    async def get_files(
+        cls,
+        db: AsyncSession,
+        skip: int = 0,
+        limit: int = 10,
+        status: Optional[str] = None
+    ) -> tuple[List[File], int]:
+        """获取文件列表
+        
+        Args:
+            db: 数据库会话
+            skip: 跳过的记录数
+            limit: 返回的最大记录数
+            status: 文件状态过滤
+            
+        Returns:
+            tuple[List[File], int]: (文件列表, 总记录数)
+        """
+        try:
+            # 构建基础查询
+            base_query = select(File)
+            if status:
+                base_query = base_query.where(File.status == status)
+            
+            # 获取总数
+            count_query = select(func.count()).select_from(base_query.subquery())
+            total = await db.scalar(count_query)
+            
+            # 获取分页数据
+            query = base_query.offset(skip).limit(limit).order_by(File.created_at.desc())
+            result = await db.execute(query)
+            files = result.scalars().all()
+            
+            logger.info(f"获取文件列表成功: {len(files)}/{total} 条记录")
+            return files, total
+            
+        except Exception as e:
+            logger.error(f"获取文件列表失败: {str(e)}")
+            raise

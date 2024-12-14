@@ -1,41 +1,49 @@
-import sys
 import os
-from loguru import logger
 from pathlib import Path
-from ..config.settings import settings
+from loguru import logger
+from src.config.settings import settings
 
 def setup_logger():
-    """配置日志"""
-    # 确保使用绝对路径
-    log_path = Path(os.path.abspath(settings.LOG_PATH))
-    log_path.mkdir(exist_ok=True)
-    
+    """配置日志记录器"""
     # 移除默认的处理器
     logger.remove()
     
-    # 强制使用配置文件中的日志级别
-    log_level = os.getenv('LOG_LEVEL', settings.LOG_LEVEL).upper()
-    if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-        log_level = "DEBUG"  # 如果配置无效，默认使用 DEBUG
+    # 确保日志目录存在
+    log_dir = Path(settings.log.LOG_FILE).parent
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 转换日志级别为大写
+    log_level = settings.log.LOG_LEVEL.upper()
+    
+    # 添加调试信息
+    print(f"当前日志级别设置为: {log_level}")
     
     # 添加控制台处理器
     logger.add(
-        sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        sink=lambda msg: print(msg),
         level=log_level,
-        colorize=True
+        format=settings.log.LOG_FORMAT,
+        colorize=True,
+        diagnose=True,  # 启用详细的异常诊断
+        backtrace=True  # 启用回溯信息
     )
     
     # 添加文件处理器
     logger.add(
-        str(log_path / "testboom.log"),
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+        sink=settings.log.LOG_FILE,
         level=log_level,
-        rotation="1 day",
-        retention="7 days"
+        format=settings.log.LOG_FORMAT,
+        rotation=settings.log.LOG_ROTATION,
+        retention=settings.log.LOG_RETENTION,
+        encoding="utf-8",
+        diagnose=True,  # 启用详细的异常诊断
+        backtrace=True  # 启用回溯信息
     )
+    
+    # 添加一条测试日志
+    logger.debug("Logger initialized with level: {}", log_level)
     
     return logger
 
-# 初始化日志配置
+# 导出配置好的logger实例
 logger = setup_logger()

@@ -50,6 +50,12 @@ class TaskManager:
         if progress is not None:
             task['progress'] = progress
         if result is not None:
+            # 确保result是列表类型
+            if isinstance(result, list):
+                # 确保每个case的id是字符串类型
+                for case in result:
+                    if isinstance(case, dict) and 'id' in case:
+                        case['id'] = str(case['id'])
             task['result'] = result
         if error is not None:
             task['error'] = error

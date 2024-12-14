@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from loguru import logger
 from src.api.middlewares.logger import LoggerMiddleware
 from src.api.models.base import ResponseModel
@@ -68,21 +69,27 @@ async def health_check():
 async def http_exception_handler(request, exc):
     """HTTP异常处理器"""
     logger.error(f"HTTP error occurred: {exc.detail}")
-    return ResponseModel(
-        code=exc.status_code,
-        message=exc.detail,
-        data=None
-    ).model_dump()
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ResponseModel(
+            code=exc.status_code,
+            message=exc.detail,
+            data=None
+        ).model_dump()
+    )
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
     """通用异常处理器"""
     logger.error(f"Unexpected error occurred: {str(exc)}")
-    return ResponseModel(
-        code=500,
-        message="Internal server error",
-        data=None
-    ).model_dump()
+    return JSONResponse(
+        status_code=500,
+        content=ResponseModel(
+            code=500,
+            message="Internal server error",
+            data=None
+        ).model_dump()
+    )
 
 # 启动事件
 @app.on_event("startup")

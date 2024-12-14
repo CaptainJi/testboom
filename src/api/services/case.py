@@ -105,7 +105,7 @@ class CaseService:
                     case.file_id = file.id
                     session.add(case)
                     case_infos.append({
-                        'id': case.id,
+                        'id': str(case.id),
                         'project': project_name,
                         'module': case.module,
                         'name': case.name,
@@ -262,11 +262,32 @@ class CaseService:
         case_id: str,
         db: AsyncSession
     ) -> Optional[TestCase]:
-        """根据ID获取用例"""
-        result = await db.execute(
-            select(TestCase).where(TestCase.id == case_id)
-        )
-        return result.scalar_one_or_none()
+        """根据ID获取用例
+        
+        Args:
+            case_id: 用例ID
+            db: 数据库会话
+            
+        Returns:
+            Optional[TestCase]: 用例对象，如果不存在则返回None
+        """
+        try:
+            # 查询用例
+            result = await db.execute(
+                select(TestCase).where(TestCase.id == case_id)
+            )
+            case = result.scalar_one_or_none()
+            
+            if case:
+                logger.debug(f"获取到用例: {case.id}")
+            else:
+                logger.warning(f"未找到用例: {case_id}")
+                
+            return case
+            
+        except Exception as e:
+            logger.error(f"获取用例失败: {str(e)}")
+            raise
     
     @classmethod
     async def list_cases(

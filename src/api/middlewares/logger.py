@@ -5,6 +5,7 @@ import time
 from typing import Callable
 from fastapi.routing import APIRoute
 from starlette.responses import Response
+import json
 
 class LoggerMiddleware(BaseHTTPMiddleware):
     """日志中间件,用于记录请求和响应信息"""
@@ -22,9 +23,28 @@ class LoggerMiddleware(BaseHTTPMiddleware):
         try:
             body = await request.body()
             if body:
-                logger.debug(f"Request body: {body.decode()}")
+                content_type = request.headers.get("content-type", "")
+                
+                # 根据内容类型处理请求体
+                if "application/json" in content_type:
+                    try:
+                        body_text = body.decode('utf-8')
+                        body_json = json.loads(body_text)
+                        logger.debug(f"Request body (JSON): {json.dumps(body_json, ensure_ascii=False)}")
+                    except json.JSONDecodeError:
+                        logger.warning("Failed to parse JSON request body")
+                elif "multipart/form-data" in content_type:
+                    logger.debug("Request contains form data (not logged)")
+                elif "application/x-www-form-urlencoded" in content_type:
+                    try:
+                        body_text = body.decode('utf-8')
+                        logger.debug(f"Request body (form): {body_text}")
+                    except UnicodeDecodeError:
+                        logger.warning("Failed to decode form data")
+                else:
+                    logger.debug(f"Request body type: {content_type} (not logged)")
         except Exception as e:
-            logger.warning(f"Failed to read request body: {str(e)}")
+            logger.warning(f"Failed to process request body: {str(e)}")
             
         # 处理请求
         try:

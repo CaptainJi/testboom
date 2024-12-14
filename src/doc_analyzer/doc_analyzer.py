@@ -1,6 +1,4 @@
-import os
 import json
-import mimetypes
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import pandas as pd
@@ -9,75 +7,25 @@ from ..logger.logger import logger
 from .file_processor import FileProcessor
 
 class DocAnalyzer:
-    """文档分析器"""
+    """文档分析器
     
-    def __init__(self, work_dir: Optional[str] = None):
+    负责分析PRD文档，包括：
+    1. 文档解压和处理
+    2. 图片内容分析
+    3. 需求理解和结构化
+    4. 测试用例生成
+    5. 结果导出
+    """
+    
+    def __init__(self, work_dir: Optional[str] = None) -> None:
         """初始化文档分析器
         
         Args:
             work_dir: 工作目录,默认为当前目录下的temp
         """
-        self.work_dir = work_dir
-        self.file_processor = FileProcessor(work_dir)
+        self.work_dir = Path(work_dir) if work_dir else Path.cwd() / 'temp'
+        self.file_processor = FileProcessor(str(self.work_dir))
         self.chat_manager = ChatManager()
-        
-        # 支持的图片格式
-        self.supported_formats = ['.jpg', '.jpeg', '.png', '.bmp']
-        # 最大图片大小(10MB)
-        self.max_image_size = 10 * 1024 * 1024
-    
-    def _validate_image(self, image_path: Path) -> bool:
-        """验证图片是否有效
-        
-        Args:
-            image_path: 图片路径
-            
-        Returns:
-            bool: 图片是否有效
-        """
-        try:
-            # 检查文件是否存在
-            if not image_path.exists():
-                logger.error(f"图片文件不存在: {image_path}")
-                return False
-            
-            # 检查文件大小
-            file_size = image_path.stat().st_size
-            if file_size > self.max_image_size:
-                logger.error(f"图片文件过大: {image_path}, 大小: {file_size/1024/1024:.2f}MB")
-                return False
-            
-            # 检查文件格式
-            file_ext = image_path.suffix.lower()
-            if file_ext not in self.supported_formats:
-                logger.error(f"不支持的图片格式: {image_path}, 格式: {file_ext}")
-                return False
-            
-            # 检查MIME类型
-            mime_type, _ = mimetypes.guess_type(str(image_path))
-            if not mime_type or not mime_type.startswith('image/'):
-                logger.error(f"无效的图片MIME类型: {image_path}, MIME: {mime_type}")
-                return False
-            
-            # 尝试读取文件
-            with open(image_path, 'rb') as f:
-                # 读取前几个字节检查文件头
-                header = f.read(8)
-                # 检查是否为空文件
-                if not header:
-                    logger.error(f"图片文件为空: {image_path}")
-                    return False
-                # 检查是否为损坏的文件
-                if len(header) < 8:
-                    logger.error(f"图片文件可能已损坏: {image_path}")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"验证图片失败: {image_path}, 错误: {e}")
-            logger.exception(e)
-            return False
     
     def analyze_prd(self, zip_path: str) -> Optional[Dict[str, Any]]:
         """分析PRD文档
@@ -105,7 +53,7 @@ class DocAnalyzer:
                 logger.info(f"\n开始分析图片: {image_path}")
                 
                 # 验证图片
-                if not self._validate_image(image_path):
+                if not self.file_processor.validate_image(image_path):
                     logger.warning(f"跳过无效图片: {image_path}")
                     continue
                 
@@ -127,12 +75,7 @@ class DocAnalyzer:
             
             # 构建汇总内容
             logger.info("\n开始构建汇总内容...")
-            summary_content = ""
-            for result in image_results:
-                summary_content += f"\n文件名: {Path(result['file']).name}\n"
-                summary_content += f"类型: image\n"
-                summary_content += f"分析结果:\n{result['content']}\n"
-                summary_content += "=" * 50 + "\n"
+            summary_content = self._build_summary_content(image_results)
             
             # 生成汇总报告
             logger.info("\n开始生成汇总报告...")
@@ -153,7 +96,8 @@ class DocAnalyzer:
             
             # 导出测试用例到Excel
             if testcases:
-                self._export_testcases_to_excel(testcases)
+                output_path = self.work_dir / 'testcases.xlsx'
+                self._export_testcases_to_excel(testcases, str(output_path))
             
             # 清理临时文件
             self.file_processor.cleanup()
@@ -171,14 +115,31 @@ class DocAnalyzer:
             logger.exception(e)
             return None
     
-    def _extract_features(self, content: str) -> Dict[str, Any]:
+    def _build_summary_content(self, image_results: List[Dict[str, Any]]) -> str:
+        """构建汇总内容
+        
+        Args:
+            image_results: 图片分析结果列表
+            
+        Returns:
+            str: 汇总内容
+        """
+        summary_content = ""
+        for result in image_results:
+            summary_content += f"\n文件名: {Path(result['file']).name}\n"
+            summary_content += f"类型: image\n"
+            summary_content += f"分析结果:\n{result['content']}\n"
+            summary_content += "=" * 50 + "\n"
+        return summary_content
+    
+    def _extract_features(self, content: str) -> Dict[str, List[str]]:
         """从分析结果中提取特征
         
         Args:
             content: 分析结果文本
             
         Returns:
-            Dict[str, Any]: 提取的特征
+            Dict[str, List[str]]: 提取的特征
         """
         try:
             features = {
@@ -221,16 +182,9 @@ class DocAnalyzer:
         except Exception as e:
             logger.error(f"提取特征失败: {e}")
             logger.exception(e)
-            return {
-                'functionality': [],
-                'workflow': [],
-                'data_flow': [],
-                'interfaces': [],
-                'constraints': [],
-                'exceptions': []
-            }
+            return {k: [] for k in ['functionality', 'workflow', 'data_flow', 'interfaces', 'constraints', 'exceptions']}
     
-    def _export_testcases_to_excel(self, testcases: List[Dict[str, Any]], output_path: str):
+    def _export_testcases_to_excel(self, testcases: List[Dict[str, Any]], output_path: str) -> None:
         """导出测试用例到Excel
         
         Args:
@@ -249,20 +203,16 @@ class DocAnalyzer:
                     '前置条件': tc.get('precondition', ''),
                     '测试步骤': '\n'.join(tc.get('steps', [])),
                     '预期结果': '\n'.join(tc.get('expected', [])),
-                    '实际结果': tc.get('actual', ''),
-                    '测试状态': tc.get('status', ''),
-                    '备注': tc.get('remark', '')
+                    '实际结果': '',
+                    '测试状态': '未执行',
+                    '备注': tc.get('notes', '')
                 })
             
-            # 创建DataFrame
+            # 创建DataFrame并导出
             df = pd.DataFrame(data)
-            
-            # 导出到Excel
             df.to_excel(output_path, index=False, engine='openpyxl')
-            
             logger.info(f"测试用例已导出到: {output_path}")
             
         except Exception as e:
             logger.error(f"导出测试用例失败: {e}")
             logger.exception(e)
-            raise

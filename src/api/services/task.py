@@ -52,10 +52,21 @@ class TaskManager:
         if result is not None:
             # 确保result是列表类型
             if isinstance(result, list):
+                # 记录调试信息
+                logger.debug(f"更新任务结果: {result}")
+                
                 # 确保每个case的id是字符串类型
                 for case in result:
-                    if isinstance(case, dict) and 'id' in case:
-                        case['id'] = str(case['id'])
+                    if isinstance(case, dict):
+                        # 确保case_id存在且为字符串
+                        if 'id' in case:
+                            case['id'] = str(case['id'])
+                        # 确保content中的id也是字符串
+                        if 'content' in case and isinstance(case['content'], dict):
+                            if 'id' in case['content']:
+                                case['content']['id'] = str(case['content']['id'])
+                        logger.debug(f"处理后的用例: {case}")
+                        
             task['result'] = result
         if error is not None:
             task['error'] = error

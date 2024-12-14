@@ -104,19 +104,36 @@ class CaseService:
                 for case in cases:
                     case.file_id = file.id
                     session.add(case)
+                    # 刷新以获取ID
+                    await session.flush()
+                    await session.refresh(case)
+                    
+                    # 记录调试信息
+                    logger.debug(f"生成用例: id={case.id}, project={project_name}, module={case.module}")
+                    
+                    # 构建用例内容
+                    case_content = json.loads(case.content)
+                    case_content['id'] = str(case.id)  # 确保content中也包含case_id
+                    case.content = json.dumps(case_content)  # 更新content
+                    
                     case_infos.append({
-                        'id': str(case.id),
+                        'id': str(case.id),  # 确保ID被转换为字符串
                         'project': project_name,
                         'module': case.module,
                         'name': case.name,
                         'level': case.level,
                         'status': case.status,
-                        'content': json.loads(case.content)
+                        'content': case_content  # 使用更新后的content
                     })
                 
                 # 更新文件状态为完成
                 await FileService.update_file_status(file, "completed", db=session)
                 await session.commit()
+                
+                # 记录生成结果
+                logger.info(f"成功生成 {len(case_infos)} 条用例")
+                for case_info in case_infos:
+                    logger.debug(f"用例信息: {case_info}")
                 
                 return case_infos
                 

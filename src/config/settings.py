@@ -78,6 +78,24 @@ class DatabaseConfig(BaseSettings):
         case_sensitive=True
     )
 
+class StorageConfig(BaseSettings):
+    """对象存储配置"""
+    ENABLED: bool = Field(False, description="是否启用对象存储")
+    PROVIDER: str = Field("minio", description="存储提供商")
+    ENDPOINT: str = Field("", description="存储服务端点")
+    ACCESS_KEY: str = Field("", description="访问密钥")
+    SECRET_KEY: str = Field("", description="访问密钥")
+    BUCKET_NAME: str = Field("", description="存储桶名称")
+    PUBLIC_URL: str = Field("", description="公共访问URL")
+    REGION: str = Field("", description="区域")
+    
+    model_config = ConfigDict(
+        env_file="",  # 禁用环境变量文件
+        env_prefix="",  # 使用空字符串而不是 None
+        extra="ignore",
+        case_sensitive=True
+    )
+
 class Settings(BaseSettings):
     """应用配置"""
     # 基础配置
@@ -92,6 +110,7 @@ class Settings(BaseSettings):
     ai: AIConfig = Field(default_factory=AIConfig)
     log: LogConfig = Field(default_factory=LogConfig)
     db: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -132,6 +151,14 @@ class Settings(BaseSettings):
             if db_config:
                 kwargs['db'] = DatabaseConfig(**db_config)
             
+            # 更新存储配置
+            storage_config = {k.replace('STORAGE_', ''): v for k, v in env_config.items() if k.startswith('STORAGE_')}
+            if storage_config:
+                # 处理布尔值
+                if 'ENABLED' in storage_config:
+                    storage_config['ENABLED'] = storage_config['ENABLED'].lower() == 'true'
+                kwargs['storage'] = StorageConfig(**storage_config)
+            
             # 更新基础配置
             if 'APP_NAME' in env_config:
                 kwargs['APP_NAME'] = env_config['APP_NAME']
@@ -143,7 +170,10 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         self._init_directories()
         self._validate_api_key()
-        self._print_debug_info()
+        
+        # 只在主进程中打印配置信息
+        if not os.environ.get('RELOAD_PROCESS'):
+            self._print_debug_info()
     
     def _init_directories(self):
         """初始化必要的目录"""
@@ -181,6 +211,13 @@ class Settings(BaseSettings):
         print("\nAI配置:")
         print(f"配置文件 ZHIPU_MODEL_CHAT: {self.ai.ZHIPU_MODEL_CHAT}")
         print(f"配置文件 ZHIPU_MODEL_VISION: {self.ai.ZHIPU_MODEL_VISION}")
+        
+        # 存储配置
+        print("\n存储配置:")
+        print(f"存储功能: {'已启用' if self.storage.ENABLED else '未启用'}")
+        if self.storage.ENABLED:
+            print(f"存储提供商: {self.storage.PROVIDER}")
+            print(f"存储桶: {self.storage.BUCKET_NAME}")
         
         print("\n其他配置:")
         print(f"调试模式: {self.DEBUG}")

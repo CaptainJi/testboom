@@ -9,6 +9,7 @@ from src.api.middlewares.logger import LoggerMiddleware
 from src.api.models.base import ResponseModel
 from src.api.routers import case, file
 from src.db import init_db
+import os
 
 # 创建FastAPI应用实例
 app = FastAPI(
@@ -100,6 +101,9 @@ async def startup_event():
     logger.info("Database initialized")
 
 if __name__ == "__main__":
+    # 标记为主进程
+    os.environ["RELOAD_PROCESS"] = "0"
+    
     import uvicorn
     # 配置日志
     logger.add(

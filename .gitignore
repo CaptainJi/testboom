@@ -43,7 +43,6 @@ test_data/
 resources/*
 !resources/prompts/
 output/
-storage/
 storage/files/*
 testboom.db
 # 系统

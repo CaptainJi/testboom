@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from ..logger.logger import logger
 from ..utils.common import ensure_dir
+from ..storage.storage import get_storage_service
+import uuid
+import shutil
 
 class FileProcessor:
     """文件处理器
@@ -30,7 +33,10 @@ class FileProcessor:
         self.supported_formats = ['.jpg', '.jpeg', '.png', '.bmp']
         # 最大图片大小(10MB)
         self.max_image_size = 10 * 1024 * 1024
-    
+        
+        # 获取存储服务
+        self.storage_service = get_storage_service()
+
     def validate_image(self, image_path: Path) -> bool:
         """验证图片是否有效
         
@@ -83,8 +89,8 @@ class FileProcessor:
             logger.error(f"验证图片失败: {image_path}, 错误: {e}")
             logger.exception(e)
             return False
-    
-    def extract_zip(self, zip_path: str) -> List[Path]:
+
+    async def extract_zip(self, zip_path: str) -> List[Path]:
         """解压zip文件
         
         Args:
@@ -102,8 +108,31 @@ class FileProcessor:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
             
-            # 返回所有文件路径
-            return list(extract_dir.rglob('*.*'))
+            # 获取所有文件路径
+            file_paths = list(extract_dir.rglob('*.*'))
+            
+            # 如果启用了对象存储，上传所有文件
+            if self.storage_service.enabled:
+                uploaded_paths = []
+                for file_path in file_paths:
+                    try:
+                        # 上传文件
+                        storage_url = await self.storage_service.upload_file(file_path)
+                        if storage_url:
+                            # 创建临时文件记录
+                            temp_file = extract_dir / f"{uuid.uuid4()}{file_path.suffix}"
+                            # 将URL写入临时文件
+                            with open(temp_file, 'w') as f:
+                                f.write(storage_url)
+                            uploaded_paths.append(temp_file)
+                            # 删除原文件
+                            file_path.unlink()
+                    except Exception as e:
+                        logger.error(f"上传文件到对象存储失败: {file_path}, 错误: {str(e)}")
+                        uploaded_paths.append(file_path)  # 保留原文件路径
+                return uploaded_paths
+            
+            return file_paths
             
         except Exception as e:
             logger.error(f"解压zip文件失败: {e}")
@@ -125,7 +154,20 @@ class FileProcessor:
         }
         
         for file in files:
-            mime_type, _ = mimetypes.guess_type(str(file))
+            # 如果是URL文件，读取URL
+            if self.storage_service.enabled:
+                try:
+                    with open(file, 'r') as f:
+                        url = f.read().strip()
+                    if url.startswith(('http://', 'https://')):
+                        mime_type = mimetypes.guess_type(url)[0]
+                    else:
+                        mime_type = mimetypes.guess_type(str(file))[0]
+                except:
+                    mime_type = mimetypes.guess_type(str(file))[0]
+            else:
+                mime_type = mimetypes.guess_type(str(file))[0]
+                
             if mime_type:
                 if mime_type.startswith('image/'):
                     classified['images'].append(file)
@@ -137,9 +179,9 @@ class FileProcessor:
                 classified['others'].append(file)
         
         return classified
-    
-    def get_file_content(self, file_path: Path) -> Tuple[str, Optional[str]]:
-        """获取文��内容
+
+    async def get_file_content(self, file_path: Path) -> Tuple[str, Optional[str]]:
+        """获取文件内容
         
         Args:
             file_path: 文件路径
@@ -147,12 +189,31 @@ class FileProcessor:
         Returns:
             Tuple[str, Optional[str]]: (文件类型, 文件内容)
             文件类型: image或text
-            文件内容: 图片文件返回None,文本文件返回内容
+            文件内容: 图片文件返回URL或base64,文本文件返回内容
         """
         try:
+            # 如果是URL文件，读取URL
+            if self.storage_service.enabled:
+                try:
+                    with open(file_path, 'r') as f:
+                        url = f.read().strip()
+                    if url.startswith(('http://', 'https://')):
+                        return 'image', url
+                except:
+                    pass
+            
             mime_type, _ = mimetypes.guess_type(str(file_path))
             if mime_type and mime_type.startswith('image/'):
-                return 'image', None
+                if self.storage_service.enabled:
+                    # 上传图片并返回URL
+                    url = await self.storage_service.upload_file(file_path)
+                    return 'image', url
+                else:
+                    # 返回base64编码
+                    with open(file_path, 'rb') as f:
+                        import base64
+                        content = base64.b64encode(f.read()).decode('utf-8')
+                        return 'image', content
             else:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     return 'text', f.read()
@@ -163,7 +224,6 @@ class FileProcessor:
     def cleanup(self) -> None:
         """清理工作目录"""
         try:
-            import shutil
             shutil.rmtree(self.work_dir)
             logger.info(f"清理工作目录成功: {self.work_dir}")
         except Exception as e:

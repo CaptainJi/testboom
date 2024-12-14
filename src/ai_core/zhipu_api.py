@@ -7,6 +7,8 @@ from src.utils.decorators import handle_exceptions, log_function_call, retry
 from src.utils.common import truncate_text, process_multimodal_content, safe_json_loads
 import base64
 import json
+import requests
+from urllib.parse import urlparse
 
 class ZhipuAI:
     """智谱AI API封装(基于LangChain)"""
@@ -128,19 +130,31 @@ class ZhipuAI:
             content = []
             for path in image_paths:
                 try:
-                    with open(path, 'rb') as f:
-                        image_data = f.read()
-                        if len(image_data) > settings.ai.MAX_IMAGE_SIZE:
-                            logger.warning(f"图片过大: {path}")
-                            continue
-                        
-                        base64_image = base64.b64encode(image_data).decode()
+                    # 检查是否是URL
+                    parsed = urlparse(path)
+                    if parsed.scheme in ('http', 'https'):
+                        # 如果是URL，直接使用
                         content.append({
                             "type": "image",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
+                                "url": path
                             }
                         })
+                    else:
+                        # 如果是本地文件，读取并转base64
+                        with open(path, 'rb') as f:
+                            image_data = f.read()
+                            if len(image_data) > settings.ai.MAX_IMAGE_SIZE:
+                                logger.warning(f"图片过大: {path}")
+                                continue
+                            
+                            base64_image = base64.b64encode(image_data).decode()
+                            content.append({
+                                "type": "image",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            })
                 except Exception as e:
                     logger.error(f"处理图片失败: {path}, 错误: {str(e)}")
                     continue

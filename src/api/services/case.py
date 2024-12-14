@@ -7,11 +7,14 @@ from src.api.services.file import FileService
 from src.ai_core.chat_manager import ChatManager
 from src.api.services.task import TaskManager
 from src.db.session import AsyncSessionLocal
+from src.storage.storage import get_storage_service
 from loguru import logger
 import zipfile
 import os
 import glob
 import asyncio
+from pathlib import Path
+import uuid
 
 class CaseService:
     """用例服务"""
@@ -83,13 +86,16 @@ class CaseService:
                 await FileService.update_file_status(file, "processing", db=session)
                 await session.commit()  # 提交状态更新
                 
+                # 获取本地文件路径
+                local_file_path = await FileService.get_local_file_path(file)
+                
                 # 根据文件类型处理
                 if file.type == "zip":
-                    cases = await cls._process_zip_file(file, project_name, module_name)
+                    cases = await cls._process_zip_file(local_file_path, project_name, module_name)
                 else:
-                    cases = await cls._process_image_file(file, project_name, module_name)
+                    cases = await cls._process_image_file(local_file_path, project_name, module_name)
                     
-                # 保存用例到数据库
+                # 保存用例到��据库
                 case_infos = []
                 total_cases = len(cases)
                 
@@ -123,7 +129,7 @@ class CaseService:
                             'content': case_content
                         }
                         batch_infos.append(case_info)
-                        
+                    
                     # 更新进度
                     progress = int((i + len(batch)) / total_cases * 90)
                     for task_id, task in TaskManager._tasks.items():
@@ -156,17 +162,33 @@ class CaseService:
     @classmethod
     async def _process_zip_file(
         cls,
-        file: File,
+        file_path: str,
         project_name: str,
         module_name: Optional[str]
     ) -> List[TestCase]:
         """处理ZIP文件"""
         cases = []
-        extract_path = os.path.join(os.path.dirname(file.path), "temp")
+        extract_path = os.path.join(os.path.dirname(file_path), "temp")
         
         try:
+            # 创建ChatManager实例
+            chat_manager = ChatManager()
+            
+            # 如果是URL，先下载到本地
+            if file_path.startswith(('http://', 'https://')):
+                storage_service = get_storage_service()
+                temp_dir = Path("storage/files/temp")
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_zip = temp_dir / f"{uuid.uuid4()}.zip"
+                
+                # 下载ZIP文件
+                success = await storage_service.download_file(file_path, temp_zip)
+                if not success:
+                    raise ValueError("下载ZIP文件失败")
+                file_path = str(temp_zip)
+                
             # 解压文件
-            with zipfile.ZipFile(file.path, 'r') as zip_ref:
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
                 
             # 获取所有图片文件
@@ -179,8 +201,23 @@ class CaseService:
             if not image_files:
                 raise ValueError("ZIP文件中未找到图片")
                 
-            # 创建ChatManager实例
-            chat_manager = ChatManager()
+            # 如果启用了对象存储，上传所有图片并获取URL
+            storage_service = get_storage_service()
+            if storage_service.enabled:
+                image_urls = []
+                for image_path in image_files:
+                    try:
+                        url = await storage_service.upload_file(image_path)
+                        if url:
+                            image_urls.append(url)
+                    except Exception as e:
+                        logger.error(f"上传图片到对象存储失败: {image_path}, 错误: {str(e)}")
+                        # 如果上传失败，使用base64编码
+                        with open(image_path, 'rb') as f:
+                            import base64
+                            content = base64.b64encode(f.read()).decode('utf-8')
+                            image_urls.append(content)
+                image_files = image_urls
             
             # 分析需求并生成用例
             summary = chat_manager.analyze_requirement(
@@ -224,13 +261,16 @@ class CaseService:
             if os.path.exists(extract_path):
                 import shutil
                 shutil.rmtree(extract_path)
+            # 如果下载了临时ZIP，也清理掉
+            if 'temp_zip' in locals():
+                temp_zip.unlink(missing_ok=True)
                 
         return cases
     
     @classmethod
     async def _process_image_file(
         cls,
-        file: File,
+        file_path: str,
         project_name: str,
         module_name: Optional[str]
     ) -> List[TestCase]:
@@ -238,10 +278,31 @@ class CaseService:
         # 创建ChatManager实例
         chat_manager = ChatManager()
         
+        # 如果是URL，直接使用
+        if file_path.startswith(('http://', 'https://')):
+            image_path = file_path
+        else:
+            # 如果是本地文件且启用了对象存储，上传并获取URL
+            storage_service = get_storage_service()
+            if storage_service.enabled:
+                try:
+                    url = await storage_service.upload_file(file_path)
+                    if url:
+                        image_path = url
+                except Exception as e:
+                    logger.error(f"上传图片到对象存储失败: {file_path}, 错误: {str(e)}")
+                    # 如果上传失败，使用base64编码
+                    with open(file_path, 'rb') as f:
+                        import base64
+                        content = base64.b64encode(f.read()).decode('utf-8')
+                        image_path = content
+            else:
+                image_path = file_path
+        
         # 分析需求并生成用例
         summary = chat_manager.analyze_requirement(
             content=f"模块名称: {module_name}" if module_name else "",
-            image_paths=[file.path]
+            image_paths=[image_path]
         )
         
         if not summary:
@@ -367,6 +428,6 @@ class CaseService:
             return cases
             
         except Exception as e:
-            logger.error(f"查询用例失败: {str(e)}")
+            logger.error(f"查询���例失败: {str(e)}")
             return []
     

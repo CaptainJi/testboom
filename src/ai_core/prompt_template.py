@@ -1,9 +1,9 @@
 from typing import Dict, Any, Optional
-from string import Template
 from pathlib import Path
 import json
 from ..logger.logger import logger
 from ..utils.common import safe_file_read, safe_file_write
+from jinja2 import Template, Environment, BaseLoader
 
 class PromptTemplate:
     """Prompt模板管理"""
@@ -16,6 +16,7 @@ class PromptTemplate:
         """
         self.template_dir = Path(template_dir) if template_dir else Path("resources/prompts")
         self.templates: Dict[str, str] = {}
+        self.env = Environment(loader=BaseLoader())
         self._load_templates()
     
     def _load_templates(self):
@@ -44,7 +45,7 @@ class PromptTemplate:
         """
         template_str = self.templates.get(name)
         if template_str:
-            return Template(template_str)
+            return self.env.from_string(template_str)
         return None
     
     def render(self, template_name: str, **kwargs) -> Optional[str]:
@@ -60,7 +61,7 @@ class PromptTemplate:
         template = self.get_template(template_name)
         if template:
             try:
-                return template.safe_substitute(**kwargs)
+                return template.render(**kwargs)
             except Exception as e:
                 logger.error(f"渲染模板失败: {str(e)}")
                 return None

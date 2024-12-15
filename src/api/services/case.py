@@ -15,6 +15,7 @@ import glob
 import asyncio
 from pathlib import Path
 import uuid
+import httpx
 
 class CaseService:
     """用例服务"""
@@ -95,7 +96,7 @@ class CaseService:
                 else:
                     cases = await cls._process_image_file(local_file_path, project_name, module_name)
                     
-                # 保存用例到据库
+                # 保存用例到��库
                 case_infos = []
                 total_cases = len(cases)
                 
@@ -162,65 +163,84 @@ class CaseService:
     @classmethod
     async def _process_zip_file(
         cls,
-        file_path: str,
+        file_paths: str,
         project_name: str,
         module_name: Optional[str]
     ) -> List[TestCase]:
-        """处理ZIP文件"""
-        cases = []
-        extract_path = os.path.join("data/temp", str(uuid.uuid4()))
+        """处理ZIP文件解压后的图片
         
+        Args:
+            file_paths: 分号分隔的图片路径列表
+            project_name: 项目名称
+            module_name: 模块名称
+            
+        Returns:
+            List[TestCase]: 生成的测试用例列表
+        """
         try:
             # 创建ChatManager实例
             chat_manager = ChatManager()
             
-            # 创建临时目录
-            os.makedirs(extract_path, exist_ok=True)
+            # 分割路径列表
+            paths = file_paths.split(';')
+            if not paths:
+                raise ValueError("未找到图片文件")
             
-            # 确保使用本地文件路径
-            if not os.path.exists(file_path):
-                raise ValueError(f"文件不存在: {file_path}")
-            
-            # 解压文件
-            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
-                
-            # 获取所有图片文件
+            # 处理每个路径
             image_files = []
-            for ext in ['*.png', '*.jpg', '*.jpeg']:
-                image_files.extend(
-                    glob.glob(os.path.join(extract_path, '**', ext), recursive=True)
+            for path in paths:
+                if path.startswith('http://') or path.startswith('https://'):
+                    # 如果是URL，直接使用
+                    image_files.append(path)
+                else:
+                    # 如果是相对路径，转换为完整的本地路径
+                    full_path = os.path.join(FileService.UPLOAD_DIR, path)
+                    # 检查文件是否存在
+                    if not os.path.exists(full_path):
+                        logger.warning(f"文件��存在，跳过: {path}")
+                        continue
+                    image_files.append(full_path)
+            
+            if not image_files:
+                raise ValueError("没有有效的图片文件")
+            
+            try:
+                # 分析需求并生成用例
+                summary = await chat_manager.analyze_requirement(
+                    content=f"模块名称: {module_name}" if module_name else "",
+                    image_paths=image_files
                 )
                 
-            if not image_files:
-                raise ValueError("ZIP文件中未找到图片")
-            
-            # 分析需求并生成用例
-            summary = chat_manager.analyze_requirement(
-                content=f"模块名称: {module_name}" if module_name else "",
-                image_paths=image_files
-            )
-            
-            if not summary:
-                raise ValueError("需求分析失败")
+                if not summary:
+                    raise ValueError("需求分析失败")
+                    
+                # 生成测试用例
+                testcases = await chat_manager.generate_testcases(
+                    summary=summary,
+                    details={
+                        "images": [
+                            {
+                                "content": summary,
+                                "features": {}
+                            }
+                        ]
+                    }
+                )
                 
-            # 生成测试用例
-            testcases = chat_manager.generate_testcases(
-                summary=summary,
-                details={
-                    "images": [
-                        {
-                            "content": summary,
-                            "features": {}
-                        }
-                    ]
-                }
-            )
-            
-            if not testcases:
-                raise ValueError("用例生成失败")
+                if not testcases:
+                    raise ValueError("用例生成失败")
+            except Exception as e:
+                # 捕获并重新抛出带有更多上下文的错误
+                error_msg = f"AI处理失败: {str(e)}"
+                if isinstance(e, httpx.ReadTimeout):
+                    error_msg = "AI服务响应超时，请稍后重试"
+                elif isinstance(e, httpx.HTTPError):
+                    error_msg = f"AI服务请求失败: {str(e)}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
             
             # 转换为TestCase对象
+            cases = []
             for case_data in testcases:
                 case = TestCase(
                     project=project_name,
@@ -232,13 +252,12 @@ class CaseService:
                 )
                 cases.append(case)
                 
-        finally:
-            # 清理临时文件
-            if os.path.exists(extract_path):
-                import shutil
-                shutil.rmtree(extract_path)
-                
-        return cases
+            return cases
+            
+        except Exception as e:
+            error_msg = str(e) if str(e) else "未知错误"
+            logger.error(f"处理图片文件失败: {error_msg}")
+            raise ValueError(error_msg)
     
     @classmethod
     async def _process_image_file(
@@ -251,21 +270,29 @@ class CaseService:
         # 创建ChatManager实例
         chat_manager = ChatManager()
         
-        # 确保使用本地文件路径
-        if not os.path.exists(file_path):
-            raise ValueError(f"文件不存在: {file_path}")
+        # 检查是否是对象存储URL
+        if file_path.startswith('http://') or file_path.startswith('https://'):
+            # 如果是URL，直接使用
+            image_paths = [file_path]
+        else:
+            # 如果是相对路径，转换为完整的本地路径
+            full_path = os.path.join(FileService.UPLOAD_DIR, file_path)
+            # 检查文件是否存在
+            if not os.path.exists(full_path):
+                raise ValueError(f"文件不存在: {file_path}")
+            image_paths = [full_path]
         
         # 分析需求并生成用例
-        summary = chat_manager.analyze_requirement(
+        summary = await chat_manager.analyze_requirement(
             content=f"模块名称: {module_name}" if module_name else "",
-            image_paths=[file_path]
+            image_paths=image_paths
         )
         
         if not summary:
             raise ValueError("需求分析失败")
             
         # 生成测试用例
-        testcases = chat_manager.generate_testcases(
+        testcases = await chat_manager.generate_testcases(
             summary=summary,
             details={
                 "images": [

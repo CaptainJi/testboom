@@ -10,21 +10,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class AIConfig(BaseSettings):
     """AI模型配置"""
-    ZHIPU_API_KEY: str = Field(
+    AI_ZHIPU_API_KEY: str = Field(
         default="",  # 允许空值，但会在使用时检查
         description="智谱AI API密钥"
     )
-    ZHIPU_MODEL_CHAT: str = Field("glm-4-flash", description="对话模型名称")
-    ZHIPU_MODEL_VISION: str = Field("glm-4v-flash", description="多模态模型名称")
-    MAX_TOKENS: int = Field(6000, description="最大token数")
-    MAX_IMAGE_SIZE: int = Field(10 * 1024 * 1024, description="最大图片大小(bytes)")
-    RETRY_COUNT: int = Field(3, description="重试次数")
-    RETRY_DELAY: int = Field(5, description="重试延迟(秒)")
-    RETRY_BACKOFF: float = Field(2.0, description="重试延迟倍数")
+    AI_ZHIPU_MODEL_CHAT: str = Field("glm-4-flash", description="对话模型名称")
+    AI_ZHIPU_MODEL_VISION: str = Field("glm-4v-flash", description="多模态模型名称")
+    AI_MAX_TOKENS: int = Field(6000, description="最大token数")
+    AI_MAX_IMAGE_SIZE: int = Field(10 * 1024 * 1024, description="最大图片大小(bytes)")
+    AI_RETRY_COUNT: int = Field(3, description="重试次数")
+    AI_RETRY_DELAY: int = Field(5, description="重试延迟(秒)")
+    AI_RETRY_BACKOFF: float = Field(2.0, description="重试延迟倍数")
     
     model_config = ConfigDict(
         env_file="",  # 禁用环境变量文件
-        env_prefix="",  # 使用空字符串而不是 None
+        env_prefix="",  # 不使用前缀，因为属性名已包含前缀
         extra="ignore",
         case_sensitive=True
     )
@@ -45,7 +45,7 @@ class LogConfig(BaseSettings):
     
     model_config = ConfigDict(
         env_file="",  # 禁用环境变量文件
-        env_prefix="",  # 使用空字符串而不是 None
+        env_prefix="",  # 不使用前缀，因为属性名已包含前缀
         extra="ignore",
         case_sensitive=True
     )
@@ -73,25 +73,25 @@ class DatabaseConfig(BaseSettings):
     
     model_config = ConfigDict(
         env_file="",  # 禁用环境变量文件
-        env_prefix="",  # 使用空字符串而不是 None
+        env_prefix="",  # 不使用前缀，因为属性名已包含前缀
         extra="ignore",
         case_sensitive=True
     )
 
 class StorageConfig(BaseSettings):
     """对象存储配置"""
-    ENABLED: bool = Field(False, description="是否启用对象存储")
-    PROVIDER: str = Field("minio", description="存储提供商")
-    ENDPOINT: str = Field("", description="存储服务端点")
-    ACCESS_KEY: str = Field("", description="访问密钥")
-    SECRET_KEY: str = Field("", description="访问密钥")
-    BUCKET_NAME: str = Field("", description="存储桶名称")
-    PUBLIC_URL: str = Field("", description="公共访问URL")
-    REGION: str = Field("", description="区域")
+    STORAGE_ENABLED: bool = Field(False, description="是否启用对象存储")
+    STORAGE_PROVIDER: str = Field("minio", description="存储提供商")
+    STORAGE_ENDPOINT: str = Field("", description="存储服务端点")
+    STORAGE_ACCESS_KEY: str = Field("", description="访问密钥")
+    STORAGE_SECRET_KEY: str = Field("", description="访问密钥")
+    STORAGE_BUCKET_NAME: str = Field("", description="存储桶名称")
+    STORAGE_PUBLIC_URL: str = Field("", description="公共访问URL")
+    STORAGE_REGION: str = Field("", description="区域")
     
     model_config = ConfigDict(
         env_file="",  # 禁用环境变量文件
-        env_prefix="",  # 使用空字符串而不是 None
+        env_prefix="",  # 不使用前缀，因为属性名已包含前缀
         extra="ignore",
         case_sensitive=True
     )
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
-        env_prefix=""  # 使用空字符串而不是 None
+        env_prefix=""  # 不使用前缀
     )
     
     def __init__(self, **kwargs):
@@ -137,26 +137,26 @@ class Settings(BaseSettings):
         # 更新配置
         if env_config:
             # 更新 AI 配置
-            ai_config = {k.replace('AI_', ''): v for k, v in env_config.items() if k.startswith('AI_')}
+            ai_config = {k: v for k, v in env_config.items() if k.startswith('AI_')}
             if ai_config:
                 kwargs['ai'] = AIConfig(**ai_config)
             
             # 更新日志配置
-            log_config = {k.replace('LOG_', ''): v for k, v in env_config.items() if k.startswith('LOG_')}
+            log_config = {k: v for k, v in env_config.items() if k.startswith('LOG_')}
             if log_config:
                 kwargs['log'] = LogConfig(**log_config)
             
             # 更新数据库配置
-            db_config = {k.replace('DB_', ''): v for k, v in env_config.items() if k.startswith('DB_')}
+            db_config = {k: v for k, v in env_config.items() if k.startswith('DB_')}
             if db_config:
                 kwargs['db'] = DatabaseConfig(**db_config)
             
             # 更新存储配置
-            storage_config = {k.replace('STORAGE_', ''): v for k, v in env_config.items() if k.startswith('STORAGE_')}
+            storage_config = {k: v for k, v in env_config.items() if k.startswith('STORAGE_')}
             if storage_config:
                 # 处理布尔值
-                if 'ENABLED' in storage_config:
-                    storage_config['ENABLED'] = storage_config['ENABLED'].lower() == 'true'
+                if 'STORAGE_ENABLED' in storage_config:
+                    storage_config['STORAGE_ENABLED'] = storage_config['STORAGE_ENABLED'].lower() == 'true'
                 kwargs['storage'] = StorageConfig(**storage_config)
             
             # 更新基础配置
@@ -189,10 +189,10 @@ class Settings(BaseSettings):
     
     def _validate_api_key(self):
         """验证API密钥"""
-        if not self.ai.ZHIPU_API_KEY:
+        if not self.ai.AI_ZHIPU_API_KEY:
             import warnings
             warnings.warn(
-                "ZHIPU_API_KEY 未设置！请在 .env 文件中设置 AI_ZHIPU_API_KEY",
+                "AI_ZHIPU_API_KEY 未设置！请在 .env 文件中设置 AI_ZHIPU_API_KEY",
                 RuntimeWarning
             )
     
@@ -206,18 +206,19 @@ class Settings(BaseSettings):
         # 日志配置
         print("\n日志配置:")
         print(f"配置文件 LOG_LEVEL: {self.log.LOG_LEVEL}")
+        print(f"配置文件 LOG_FILE: {self.log.LOG_FILE}")
         
         # AI配置
         print("\nAI配置:")
-        print(f"配置文件 ZHIPU_MODEL_CHAT: {self.ai.ZHIPU_MODEL_CHAT}")
-        print(f"配置文件 ZHIPU_MODEL_VISION: {self.ai.ZHIPU_MODEL_VISION}")
+        print(f"配置文件 AI_ZHIPU_MODEL_CHAT: {self.ai.AI_ZHIPU_MODEL_CHAT}")
+        print(f"配置文件 AI_ZHIPU_MODEL_VISION: {self.ai.AI_ZHIPU_MODEL_VISION}")
         
         # 存储配置
         print("\n存储配置:")
-        print(f"存储功能: {'已启用' if self.storage.ENABLED else '未启用'}")
-        if self.storage.ENABLED:
-            print(f"存储提供商: {self.storage.PROVIDER}")
-            print(f"存储桶: {self.storage.BUCKET_NAME}")
+        print(f"存储功能: {'已启用' if self.storage.STORAGE_ENABLED else '未启用'}")
+        if self.storage.STORAGE_ENABLED:
+            print(f"存储提供商: {self.storage.STORAGE_PROVIDER}")
+            print(f"存储桶: {self.storage.STORAGE_BUCKET_NAME}")
         
         print("\n其他配置:")
         print(f"调试模式: {self.DEBUG}")

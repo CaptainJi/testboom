@@ -3,13 +3,14 @@ import shutil
 from typing import Optional, List
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from src.db.models import File
 from src.storage.storage import get_storage_service
 from loguru import logger
 import uuid
 from pathlib import Path
-from sqlalchemy import func
+import zipfile
+import tempfile
 
 class FileService:
     """文件服务"""
@@ -26,53 +27,95 @@ class FileService:
         db: AsyncSession
     ) -> File:
         """保存上传的文件"""
-        # 检查文件类型
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        if file_ext not in cls.ALLOWED_EXTENSIONS:
-            raise ValueError(f"不支持的文件类型: {file_ext}")
-            
-        # 确保存储目录存在
-        os.makedirs(cls.UPLOAD_DIR, exist_ok=True)
-        os.makedirs(cls.TEMP_DIR, exist_ok=True)
-        
-        # 生成唯一文件名
-        unique_filename = f"{uuid.uuid4()}{file_ext}"
-        file_path = os.path.join(cls.UPLOAD_DIR, unique_filename)
-        
-        # 保存文件到本地
         try:
-            with open(file_path, "wb") as f:
-                shutil.copyfileobj(file.file, f)
-        except Exception as e:
-            logger.error(f"文件保存失败: {str(e)}")
-            raise
+            # 检查文件类型
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            if file_ext not in cls.ALLOWED_EXTENSIONS:
+                raise ValueError(f"不支持的文件类型: {file_ext}")
+                
+            # 确保存储目录存在
+            os.makedirs(cls.UPLOAD_DIR, exist_ok=True)
+            os.makedirs(cls.TEMP_DIR, exist_ok=True)
             
-        # 上传到对象存储
-        storage_url = None
-        try:
+            # 获取存储服务
             storage_service = get_storage_service()
-            if storage_service.enabled:
-                storage_url = await storage_service.upload_file(file_path)
-                logger.info(f"文件已上传到对象存储: {storage_url}")
-        except Exception as e:
-            logger.error(f"文件上传到对象存储失败: {str(e)}")
-            # 这里我们不抛出异常，因为本地存储已经成功
             
-        # 创建文件记录
-        db_file = File(
-            name=file.filename,
-            type="zip" if file_ext == ".zip" else "image",
-            path=file_path,  # 使用本地文件路径
-            storage_url=storage_url,  # 记录对象存储URL
-            status="pending"
-        )
-        
-        # 保存到数据库
-        db.add(db_file)
-        await db.commit()
-        await db.refresh(db_file)
-        
-        return db_file
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+                # 将上传的文件内容写入临时文件
+                shutil.copyfileobj(file.file, temp_file)
+                temp_file_path = temp_file.name
+            
+            try:
+                paths = []  # 存储所有文件路径
+                
+                if file_ext == '.zip':
+                    # 验证并解压ZIP文件
+                    try:
+                        with zipfile.ZipFile(temp_file_path, 'r') as zip_ref:
+                            # 创建临时解压目录
+                            with tempfile.TemporaryDirectory() as temp_dir:
+                                zip_ref.extractall(temp_dir)
+                                
+                                # 处理所有图片文件
+                                for root, _, files in os.walk(temp_dir):
+                                    for filename in files:
+                                        if os.path.splitext(filename)[1].lower() in {'.png', '.jpg', '.jpeg'}:
+                                            img_path = os.path.join(root, filename)
+                                            if storage_service.enabled:
+                                                # 上传到对象存储
+                                                url = await storage_service.upload_file(img_path)
+                                                paths.append(url)
+                                            else:
+                                                # 复制到本地存储
+                                                unique_name = f"{uuid.uuid4()}{os.path.splitext(filename)[1]}"
+                                                dest_path = os.path.join(cls.UPLOAD_DIR, unique_name)
+                                                shutil.copy2(img_path, dest_path)
+                                                paths.append(unique_name)  # 存储相对路径
+                                
+                                if not paths:
+                                    raise ValueError("ZIP文件中没有找到有效的图片文件")
+                    except zipfile.BadZipFile:
+                        raise ValueError("无效的ZIP文件")
+                else:
+                    # 处理单个图片文件
+                    unique_name = f"{uuid.uuid4()}{file_ext}"
+                    if storage_service.enabled:
+                        # 上传到对象存储
+                        url = await storage_service.upload_file(temp_file_path)
+                        paths.append(url)
+                    else:
+                        # 移动到本地存储
+                        dest_path = os.path.join(cls.UPLOAD_DIR, unique_name)
+                        shutil.move(temp_file_path, dest_path)
+                        paths.append(unique_name)  # 存储相对路径
+                
+                # 使用分号连接所有路径
+                final_path = ';'.join(paths)
+                
+                # 创建文件记录
+                db_file = File(
+                    name=file.filename,
+                    type="zip" if file_ext == ".zip" else "image",
+                    path=final_path,
+                    status="pending"
+                )
+                
+                # 保存到数据库
+                db.add(db_file)
+                await db.commit()
+                await db.refresh(db_file)
+                
+                return db_file
+                
+            finally:
+                # 清理临时文件
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
+                    
+        except Exception as e:
+            logger.error(f"文件处理失败: {str(e)}")
+            raise
     
     @classmethod
     async def get_file_by_id(
@@ -111,9 +154,21 @@ class FileService:
         file: File,
         force_download: bool = False
     ) -> str:
-        """获取文件本地路径"""
-        # 直接返回本地路径
+        """获取文件路径
+        
+        Args:
+            file: 文件记录
+            force_download: 是否强制重新下载（已废弃）
+            
+        Returns:
+            str: 文件路径，如果是多个文件则用分号分隔
+        """
         return file.path
+    
+    @staticmethod
+    def _path_to_list(path: str) -> List[str]:
+        """将分号分隔的路径转换为列表"""
+        return [p.strip() for p in path.split(";") if p.strip()] if path else []
     
     @classmethod
     async def get_files(
@@ -122,18 +177,8 @@ class FileService:
         skip: int = 0,
         limit: int = 10,
         status: Optional[str] = None
-    ) -> tuple[List[File], int]:
-        """获取文件列表
-        
-        Args:
-            db: 数据库会话
-            skip: 跳过的记录数
-            limit: 返回的最大记录数
-            status: 文件状态过滤
-            
-        Returns:
-            tuple[List[File], int]: (文件列表, 总记录数)
-        """
+    ) -> tuple[List[dict], int]:
+        """获取文件列表"""
         try:
             # 构建基础查询
             base_query = select(File)
@@ -145,9 +190,24 @@ class FileService:
             total = await db.scalar(count_query)
             
             # 获取分页数据
-            query = base_query.offset(skip).limit(limit).order_by(File.created_at.desc())
+            query = base_query.offset(skip).limit(limit).order_by(File.id.desc())
             result = await db.execute(query)
-            files = result.scalars().all()
+            db_files = result.scalars().all()
+            
+            # 转换文件记录
+            files = []
+            for file in db_files:
+                file_dict = {
+                    "id": file.id,
+                    "name": file.name,
+                    "type": file.type,
+                    "status": file.status,
+                    "error": file.error,
+                    "path": file.path,  # 不再转换为列表
+                    "created_at": file.created_at,
+                    "updated_at": file.updated_at
+                }
+                files.append(file_dict)
             
             logger.info(f"获取文件列表成功: {len(files)}/{total} 条记录")
             return files, total

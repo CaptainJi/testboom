@@ -40,7 +40,7 @@ class TaskInfo(BaseModel):
     type: str
     status: str
     progress: int
-    result: Optional[List[CaseInfo]] = None
+    result: Optional[Union[Dict[str, Any], List[CaseInfo]]] = None
     error: Optional[str] = None
     created_at: str
     updated_at: str
@@ -166,30 +166,36 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
         # 转换任务结果
         result = None
         if task.get('result'):
-            # 记录调试信息
-            logger.debug(f"任务结果: {task['result']}")
-            result = []
-            for case in task['result']:
-                # 记录每个用例的ID
-                case_id = case.get('id') or case.get('content', {}).get('id')
-                logger.debug(f"处理用例: id={case_id}")
-                
-                try:
-                    case_info = CaseInfo(
-                        case_id=case_id,  # 优先使用外层id，如果没有则使用content中的id
-                        project=case.get('project', ''),
-                        module=case.get('module', ''),
-                        name=case.get('name', ''),
-                        level=case.get('level', ''),
-                        status=case.get('status', ''),
-                        content=case.get('content', {})
-                    )
-                    result.append(case_info)
-                    logger.debug(f"转换后的用例信息: {case_info}")
-                except Exception as e:
-                    logger.error(f"转换用例信息失败: {str(e)}, 用例数据: {case}")
-                    continue
-            
+            if isinstance(task['result'], dict) and task['result'].get('progress'):
+                # 处理进度信息
+                result = task['result'].copy()
+                # 如果有 path 字段，将其转换为列表
+                if 'path' in result and isinstance(result['path'], str):
+                    result['path'] = result['path'].split(';') if result['path'] else []
+            else:
+                # 处理用例列表
+                result = []
+                for case in task['result']:
+                    # 记录每个用例的ID
+                    case_id = case.get('id') or case.get('content', {}).get('id')
+                    logger.debug(f"处理用例: id={case_id}")
+                    
+                    try:
+                        case_info = CaseInfo(
+                            case_id=case_id,
+                            project=case.get('project', ''),
+                            module=case.get('module', ''),
+                            name=case.get('name', ''),
+                            level=case.get('level', ''),
+                            status=case.get('status', ''),
+                            content=case.get('content', {})
+                        )
+                        result.append(case_info)
+                        logger.debug(f"转换后的用例信息: {case_info}")
+                    except Exception as e:
+                        logger.error(f"转换用例信息失败: {str(e)}, 用例数据: {case}")
+                        continue
+
         task_info = TaskInfo(
             task_id=task['id'],
             type=task['type'],
@@ -229,7 +235,7 @@ async def list_cases(
             level=level
         )
         
-        # 转换为响应模型
+        # 转换为应模型
         case_infos = []
         for case in cases:
             try:
@@ -261,7 +267,7 @@ async def list_cases(
         return response
         
     except Exception as e:
-        logger.error(f"获取���例列表失败: {str(e)}")
+        logger.error(f"获取用例列表失败: {str(e)}")
         raise HTTPException(status_code=500, detail="获取用例列表失败")
 
 @router.get("/{case_id}")

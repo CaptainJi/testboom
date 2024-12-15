@@ -5,6 +5,8 @@ from src.config.settings import settings
 from src.logger.logger import logger
 from src.utils.decorators import handle_exceptions, log_function_call, retry
 from src.utils.common import truncate_text, process_multimodal_content, safe_json_loads
+from src.storage.storage import get_storage_service
+from .prompt_template import PromptTemplate
 import base64
 import json
 import requests
@@ -16,13 +18,13 @@ class ZhipuAI:
     def __init__(self):
         """初始化智谱AI客户端"""
         logger.info("初始化智谱AI客户端")
-        logger.info(f"配置的对话模型: {settings.ai.ZHIPU_MODEL_CHAT}")
-        logger.info(f"配置的视觉模型: {settings.ai.ZHIPU_MODEL_VISION}")
+        logger.info(f"配置的对话模型: {settings.ai.AI_ZHIPU_MODEL_CHAT}")
+        logger.info(f"配置的视觉模型: {settings.ai.AI_ZHIPU_MODEL_VISION}")
         
         # 通用对话模型
         self.chat_model = ChatZhipuAI(
-            api_key=settings.ai.ZHIPU_API_KEY,
-            model_name=settings.ai.ZHIPU_MODEL_CHAT,
+            api_key=settings.ai.AI_ZHIPU_API_KEY,
+            model_name=settings.ai.AI_ZHIPU_MODEL_CHAT,
             temperature=0.2,
             top_p=0.2,
             streaming=False
@@ -30,21 +32,24 @@ class ZhipuAI:
         
         # 多模态模型
         self.vision_model = ChatZhipuAI(
-            api_key=settings.ai.ZHIPU_API_KEY,
-            model_name=settings.ai.ZHIPU_MODEL_VISION,
+            api_key=settings.ai.AI_ZHIPU_API_KEY,
+            model_name=settings.ai.AI_ZHIPU_MODEL_VISION,
             temperature=0.2,
             top_p=0.2,
             streaming=False
         )
         
+        # 初始化提示词模板管理器
+        self.prompt_template = PromptTemplate()
+        
         # 验证模型名称
-        if self.chat_model.model_name != settings.ai.ZHIPU_MODEL_CHAT:
-            logger.warning(f"对话模型名称不匹配: 期望 {settings.ai.ZHIPU_MODEL_CHAT}, 实际 {self.chat_model.model_name}")
-            self.chat_model.model_name = settings.ai.ZHIPU_MODEL_CHAT
+        if self.chat_model.model_name != settings.ai.AI_ZHIPU_MODEL_CHAT:
+            logger.warning(f"对话模型名称不匹配: 期望 {settings.ai.AI_ZHIPU_MODEL_CHAT}, 实际 {self.chat_model.model_name}")
+            self.chat_model.model_name = settings.ai.AI_ZHIPU_MODEL_CHAT
             
-        if self.vision_model.model_name != settings.ai.ZHIPU_MODEL_VISION:
-            logger.warning(f"视觉模型名称不匹配: 期望 {settings.ai.ZHIPU_MODEL_VISION}, 实际 {self.vision_model.model_name}")
-            self.vision_model.model_name = settings.ai.ZHIPU_MODEL_VISION
+        if self.vision_model.model_name != settings.ai.AI_ZHIPU_MODEL_VISION:
+            logger.warning(f"视觉模型名称不匹配: 期望 {settings.ai.AI_ZHIPU_MODEL_VISION}, 实际 {self.vision_model.model_name}")
+            self.vision_model.model_name = settings.ai.AI_ZHIPU_MODEL_VISION
     
     @log_function_call(level="DEBUG")
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
@@ -74,13 +79,13 @@ class ZhipuAI:
         return langchain_messages
     
     @retry(
-        max_retries=settings.ai.RETRY_COUNT,
-        delay=settings.ai.RETRY_DELAY,
-        backoff=settings.ai.RETRY_BACKOFF
+        max_retries=settings.ai.AI_RETRY_COUNT,
+        delay=settings.ai.AI_RETRY_DELAY,
+        backoff=settings.ai.AI_RETRY_BACKOFF
     )
     @handle_exceptions(default_return=None)
     @log_function_call()
-    def chat(
+    async def chat(
         self, 
         messages: List[Dict[str, Any]], 
         response_format: Optional[Dict[str, str]] = None
@@ -97,7 +102,7 @@ class ZhipuAI:
         # 转换消息格式
         langchain_messages = self._convert_messages(messages)
         
-        # 如果需要JSON响应，添加system消息
+        # 如果需JSON响应，添加system消息
         if response_format and response_format.get("type") == "json_object":
             system_msg = SystemMessage(content="请以JSON格式返回响应")
             langchain_messages.insert(0, system_msg)
@@ -107,106 +112,158 @@ class ZhipuAI:
         if response_format:
             kwargs["response_format"] = response_format
         
-        logger.info(f"正在使用模型: {self.chat_model.model_name}")
-        response = self.chat_model.invoke(langchain_messages, **kwargs)
+        logger.info(f"正在使用的大模型: {self.chat_model.model_name}")
+        response = await self.chat_model.ainvoke(langchain_messages, **kwargs)
         
-        return response.content if isinstance(response, AIMessage) else response
+        result = response.content if isinstance(response, AIMessage) else response
+        if result:
+            logger.debug(f"大模型回复内容:\n{result}")
+        else:
+            logger.warning("大模型未返回有效内容")
+            
+        return result
     
     @retry(
-        max_retries=settings.ai.RETRY_COUNT,
-        delay=settings.ai.RETRY_DELAY,
-        backoff=settings.ai.RETRY_BACKOFF
+        max_retries=settings.ai.AI_RETRY_COUNT,
+        delay=settings.ai.AI_RETRY_DELAY,
+        backoff=settings.ai.AI_RETRY_BACKOFF
     )
     @handle_exceptions(default_return=None)
     @log_function_call()
-    def chat_with_images(
+    async def chat_with_images(
         self, 
         messages: List[Dict[str, Any]], 
         image_paths: List[str]
     ) -> Optional[str]:
-        """发送带图片的对话请求"""
+        """发送带图片的对话请求
+        
+        Args:
+            messages: 对话历史记录列表
+            image_paths: 图片路径列表（本地路径或URL）
+            
+        Returns:
+            Optional[str]: AI的响应，如果出错则返回None
+        """
+        logger.info(f"正在使用的视觉模型: {self.vision_model.model_name}")
         try:
-            # 处理图片
-            content = []
-            for path in image_paths:
-                try:
-                    # 检查是否是URL
-                    parsed = urlparse(path)
-                    if parsed.scheme in ('http', 'https'):
-                        # 如果是URL，直接使用
-                        content.append({
-                            "type": "image",
-                            "image_url": {
-                                "url": path
+            storage_service = get_storage_service()
+            all_results = []
+            total_images = len(image_paths)
+            
+            # 获取图片分析提示词
+            prompt = self.prompt_template.render("image_analysis")
+            if not prompt:
+                logger.error("获取图片分析提示词失败")
+                return None
+            
+            # 逐个处理每张图片
+            for index, path in enumerate(image_paths, 1):
+                logger.info(f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片...")
+                
+                # 更新任务进度
+                from src.api.services.task import TaskManager
+                for task_id, task in TaskManager._tasks.items():
+                    if task['type'] == 'generate_cases' and task['status'] == 'running':
+                        TaskManager.update_task(
+                            task_id,
+                            result={
+                                'progress': f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片",
+                                'current': index,
+                                'total': total_images
                             }
-                        })
-                    else:
-                        # 如果是本地文件，读取并转base64
+                        )
+                        break
+                
+                # 构建图片内容
+                image_content = None
+                if storage_service and storage_service.enabled:
+                    image_content = {
+                        "type": "image_url",
+                        "image_url": {"url": path}
+                    }
+                else:
+                    try:
                         with open(path, 'rb') as f:
                             image_data = f.read()
-                            if len(image_data) > settings.ai.MAX_IMAGE_SIZE:
+                            if len(image_data) > settings.ai.AI_MAX_IMAGE_SIZE:
                                 logger.warning(f"图片过大: {path}")
                                 continue
                             
                             base64_image = base64.b64encode(image_data).decode()
-                            content.append({
-                                "type": "image",
+                            image_content = {
+                                "type": "image_url",
                                 "image_url": {
                                     "url": f"data:image/jpeg;base64,{base64_image}"
                                 }
-                            })
-                except Exception as e:
-                    logger.error(f"处理图片失败: {path}, 错误: {str(e)}")
+                            }
+                    except Exception as e:
+                        logger.error(f"处理图片失败: {path}, 错误: {str(e)}")
+                        continue
+                
+                if not image_content:
                     continue
-                    
-            # 添加文本内容
-            if messages:
-                last_message = messages[-1]
-                if isinstance(last_message.get("content"), str):
-                    content.append({
-                        "type": "text",
-                        "text": last_message["content"]
-                    })
-            
-            # 处理多模态内容
-            processed_content = process_multimodal_content(
-                content, 
-                settings.ai.MAX_TOKENS
-            )
-            
-            # 构建系统消息
-            system_message = SystemMessage(content="""你是一个专业的需求分析专家。请仔细分析图片中的需求，提取关键信息并生成结构化的分析结果。
-请以JSON格式返回分析结果，格式如下：
-{
-    "title": "需求标题",
-    "description": "需求描述",
-    "modules": [
-        {
-            "name": "模块名称",
-            "features": [
-                {
-                    "name": "功能名称",
-                    "description": "功能描述",
-                    "key_points": ["关键点1", "关键点2"]
+                
+                # 构建消息
+                user_message = {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        image_content
+                    ]
                 }
-            ]
-        }
-    ],
-    "test_focus": ["测试重点1", "测试重点2"],
-    "notes": ["注意事项1", "注意事项2"]
-}""")
+                
+                # 发送请求
+                response = await self.vision_model.ainvoke(
+                    [user_message],
+                    response_format={"type": "json_object"}
+                )
+                
+                result = response.content if isinstance(response, AIMessage) else response
+                if result:
+                    # 记录大模型的原始回复
+                    logger.debug(f"大模型回复内容:\n{result}")
+                    
+                    parsed_result = self.parse_response(result)
+                    if parsed_result:
+                        all_results.append(parsed_result)
+                        logger.debug(f"解析后的结果:\n{json.dumps(parsed_result, ensure_ascii=False, indent=2)}")
+                    else:
+                        logger.warning("解析结��失败")
+                else:
+                    logger.warning("大模型未返回有效内容")
+                
+            # 如果没有有效结果，返回None
+            if not all_results:
+                return None
+                
+            # 如果只有一张图片，直接返回结果
+            if len(all_results) == 1:
+                return json.dumps(all_results[0], ensure_ascii=False)
             
-            # 构建用户消息
-            user_message = HumanMessage(content=processed_content)
+            # 获取结果汇总提示词
+            summary_prompt = self.prompt_template.render(
+                "requirement_summary", 
+                content=json.dumps(all_results, ensure_ascii=False)
+            )
+            if not summary_prompt:
+                logger.error("获取结果汇总提示词失败")
+                return json.dumps(all_results[0], ensure_ascii=False)
             
-            # 发送请求
-            logger.info(f"正在使用模型: {self.vision_model.model_name}")
-            response = self.vision_model.invoke(
-                [system_message, user_message],
+            # 发送汇总请求
+            summary_message = {
+                "role": "user",
+                "content": summary_prompt
+            }
+            
+            summary_response = await self.chat_model.ainvoke(
+                [summary_message],
                 response_format={"type": "json_object"}
             )
             
-            return response.content if isinstance(response, AIMessage) else response
+            return summary_response.content if isinstance(summary_response, AIMessage) else summary_response
             
         except Exception as e:
             logger.error(f"图片对话请求失败: {str(e)}")

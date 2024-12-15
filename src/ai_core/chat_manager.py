@@ -93,7 +93,7 @@ class ChatManager:
     
     @handle_exceptions(default_return=None)
     @log_function_call()
-    def analyze_requirement(
+    async def analyze_requirement(
         self, 
         content: str, 
         image_paths: Optional[List[str]] = None
@@ -133,7 +133,7 @@ class ChatManager:
         
         # 根据是否有图片选择对话方式
         if image_paths:
-            response = self.ai.chat_with_images(messages, image_paths)
+            response = await self.ai.chat_with_images(messages, image_paths)
         else:
             response = self.ai.chat(messages, response_format={"type": "json_object"})
             
@@ -145,7 +145,7 @@ class ChatManager:
     
     @handle_exceptions(default_return=None)
     @log_function_call()
-    def generate_testcases(
+    async def generate_testcases(
         self, 
         summary: Dict[str, Any], 
         details: Optional[Dict[str, Any]] = None
@@ -191,7 +191,7 @@ class ChatManager:
         ]
         
         # 调用AI生成测试用例
-        response = self.ai.chat(messages, response_format={"type": "json_object"})
+        response = await self.ai.chat(messages, response_format={"type": "json_object"})
         if not response:
             logger.error("生成测试用例失败：AI返回为空")
             return None
@@ -221,7 +221,7 @@ class ChatManager:
                 logger.error(f"测试用例缺少必要字段: {missing_fields}")
                 continue
                 
-            # 确保steps和expected是列表
+            # 确保steps和expected是列��
             if not isinstance(testcase['steps'], list):
                 testcase['steps'] = [testcase['steps']]
             if not isinstance(testcase['expected'], list):

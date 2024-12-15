@@ -9,8 +9,7 @@ class File(Base):
     # 基本信息
     name: Mapped[str] = mapped_column(String(255))
     type: Mapped[str] = mapped_column(String(50))  # zip/image
-    path: Mapped[str] = mapped_column(String(255))
-    storage_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # 对象存储地址
+    path: Mapped[str] = mapped_column(String(1024))  # 文件路径或对象存储URL(多个URL用;分隔)
     status: Mapped[str] = mapped_column(String(50))  # pending/processing/completed/failed
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     

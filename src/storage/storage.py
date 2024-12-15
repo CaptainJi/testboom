@@ -13,24 +13,24 @@ class StorageService:
     
     def __init__(self):
         """初始化存储服务"""
-        self.enabled = settings.storage.ENABLED
+        self.enabled = settings.storage.STORAGE_ENABLED
         if not self.enabled:
             logger.info("存储服务未启用")
             return
             
         try:
             self.client = minio.Minio(
-                settings.storage.ENDPOINT,
-                access_key=settings.storage.ACCESS_KEY,
-                secret_key=settings.storage.SECRET_KEY,
-                secure=settings.storage.PUBLIC_URL.startswith("https"),
-                region=settings.storage.REGION or None
+                settings.storage.STORAGE_ENDPOINT,
+                access_key=settings.storage.STORAGE_ACCESS_KEY,
+                secret_key=settings.storage.STORAGE_SECRET_KEY,
+                secure=settings.storage.STORAGE_PUBLIC_URL.startswith("https"),
+                region=settings.storage.STORAGE_REGION or None
             )
             
             # 确保存储桶存在
-            if not self.client.bucket_exists(settings.storage.BUCKET_NAME):
-                self.client.make_bucket(settings.storage.BUCKET_NAME)
-                logger.info(f"创建存储桶: {settings.storage.BUCKET_NAME}")
+            if not self.client.bucket_exists(settings.storage.STORAGE_BUCKET_NAME):
+                self.client.make_bucket(settings.storage.STORAGE_BUCKET_NAME)
+                logger.info(f"创建存储桶: {settings.storage.STORAGE_BUCKET_NAME}")
             
             logger.info("存储服务初始化成功")
         except Exception as e:
@@ -42,7 +42,7 @@ class StorageService:
         上传文件到对象存储
         
         Args:
-            file_path: 本��文件路径
+            file_path: 本地文件路径
             object_name: 对象存储中的文件名，如果不指定则使用文件名
             
         Returns:
@@ -66,17 +66,17 @@ class StorageService:
             
             # 上传文件
             self.client.fput_object(
-                settings.storage.BUCKET_NAME,
+                settings.storage.STORAGE_BUCKET_NAME,
                 object_name,
                 str(file_path)
             )
             
             # 构建公共访问URL
-            url = f"{settings.storage.PUBLIC_URL}/{settings.storage.BUCKET_NAME}/{object_name}"
+            url = f"{settings.storage.STORAGE_PUBLIC_URL}/{settings.storage.STORAGE_BUCKET_NAME}/{object_name}"
             logger.info(f"文件上传成功: {url}")
             
             # 记录存储详情
-            logger.debug(f"存储详情: bucket={settings.storage.BUCKET_NAME}, "
+            logger.debug(f"存储详情: bucket={settings.storage.STORAGE_BUCKET_NAME}, "
                         f"object={object_name}, size={file_path.stat().st_size}, "
                         f"content_type={mimetypes.guess_type(str(file_path))[0]}")
             
@@ -99,7 +99,7 @@ class StorageService:
         if not self.enabled:
             return None
             
-        return f"{settings.storage.PUBLIC_URL}/{settings.storage.BUCKET_NAME}/{object_name}"
+        return f"{settings.storage.STORAGE_PUBLIC_URL}/{settings.storage.STORAGE_BUCKET_NAME}/{object_name}"
     
     async def delete_file(self, object_name: str) -> bool:
         """
@@ -115,7 +115,7 @@ class StorageService:
             return False
             
         try:
-            self.client.remove_object(settings.storage.BUCKET_NAME, object_name)
+            self.client.remove_object(settings.storage.STORAGE_BUCKET_NAME, object_name)
             logger.info(f"文件删除成功: {object_name}")
             return True
         except Exception as e:
@@ -167,7 +167,7 @@ class StorageService:
             
             # 下载文件
             self.client.fget_object(
-                settings.storage.BUCKET_NAME,
+                settings.storage.STORAGE_BUCKET_NAME,
                 object_name,
                 str(local_path)
             )

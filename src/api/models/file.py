@@ -16,7 +16,6 @@ class FileInfo(FileBase):
     """文件信息模型"""
     id: str
     path: str
-    storage_url: Optional[str] = None
     error: Optional[str] = None
     created_at: datetime
     updated_at: datetime

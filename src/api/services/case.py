@@ -53,7 +53,8 @@ class CaseService:
                 cls._generate_cases,
                 file_id,
                 project_name,
-                module_name
+                module_name,
+                task_id
             )
             
             return task_id
@@ -73,7 +74,8 @@ class CaseService:
         cls,
         file_id: str,
         project_name: str,
-        module_name: str
+        module_name: str,
+        task_id: str
     ) -> None:
         """生成测试用例
         
@@ -81,6 +83,7 @@ class CaseService:
             file_id: 文件ID
             project_name: 项目名称
             module_name: 模块名称
+            task_id: 任务ID
         """
         try:
             # 获取文件信息
@@ -97,21 +100,42 @@ class CaseService:
                 cases = await cls._process_zip_file(
                     file_paths=file.path,
                     project_name=project_name,
-                    module_name=module_name
+                    module_name=module_name,
+                    task_id=task_id,
+                    file_id=file_id
                 )
                 
                 if not cases:
                     raise ValueError("生成用例失败")
                 
+                # 更新任务状态 - 开始保存用例
+                TaskManager.update_task(
+                    task_id,
+                    result={
+                        'progress': '正在保存测试用例...'
+                    }
+                )
+                
                 # 保存测试用例
                 for case in cases:
                     case.file_id = file_id
+                    case.task_id = task_id
                     session.add(case)
                 
                 # 更新文件状态
                 file.status = "success"
                 file.error = None
                 await session.commit()
+                
+                # 更新任务状态 - 完成
+                TaskManager.update_task(
+                    task_id,
+                    status='completed',
+                    result={
+                        'progress': '测试用例生成完成',
+                        'cases_count': len(cases)
+                    }
+                )
                 
         except Exception as e:
             error_msg = f"AI处理失败: {str(e)}"
@@ -128,6 +152,13 @@ class CaseService:
                     file.error = error_msg
                     await session.commit()
             
+            # 更新任务状态 - 失败
+            TaskManager.update_task(
+                task_id,
+                status='failed',
+                error=error_msg
+            )
+            
             raise ValueError(error_msg)
     
     @classmethod
@@ -135,7 +166,9 @@ class CaseService:
         cls,
         file_paths: str,
         project_name: str,
-        module_name: Optional[str]
+        module_name: Optional[str],
+        task_id: str,
+        file_id: Optional[str] = None
     ) -> List[TestCase]:
         """处理ZIP文件解压后的图片
         
@@ -143,6 +176,8 @@ class CaseService:
             file_paths: 分号分隔的图片路径列表
             project_name: 项目名称
             module_name: 模块名称
+            task_id: 任务ID
+            file_id: 文件ID
             
         Returns:
             List[TestCase]: 生成的测试用例列表
@@ -175,14 +210,51 @@ class CaseService:
                 raise ValueError("没有有效的图片文件")
             
             try:
+                # 更新任务状态 - 开始分析需求
+                if task_id:
+                    TaskManager.update_task(
+                        task_id,
+                        result={
+                            'progress': f'正在分析需求文档 (共{len(image_files)}张图片)...'
+                        }
+                    )
+                
+                # 定义状态更新回调
+                def update_progress(current: int, total: int, stage: str = 'analyze'):
+                    if task_id:
+                        if stage == 'analyze':
+                            TaskManager.update_task(
+                                task_id,
+                                result={
+                                    'progress': f'正在分析第 {current}/{total} 张图片...'
+                                }
+                            )
+                        elif stage == 'generate':
+                            TaskManager.update_task(
+                                task_id,
+                                result={
+                                    'progress': f'正在生成测试用例...'
+                                }
+                            )
+                
                 # 分析需求并生成用例
                 summary = await chat_manager.analyze_requirement(
                     content=f"模块名称: {module_name}" if module_name else "",
-                    image_paths=image_files
+                    image_paths=image_files,
+                    progress_callback=lambda c, t: update_progress(c, t, 'analyze')
                 )
                 
                 if not summary:
                     raise ValueError("需求分析失败")
+                
+                # 更新任务状态 - 开始生成用例
+                if task_id:
+                    TaskManager.update_task(
+                        task_id,
+                        result={
+                            'progress': '正在生成功能架构相关测试用例...'
+                        }
+                    )
                     
                 # 生成测试用例
                 testcases = await chat_manager.generate_testcases(
@@ -194,11 +266,23 @@ class CaseService:
                                 "features": {}
                             }
                         ]
-                    }
+                    },
+                    progress_callback=lambda stage, _: update_progress(1, None, 'generate')
                 )
                 
                 if not testcases:
                     raise ValueError("用例生成失败")
+                
+                # 更新任务状态 - 用例生成完成
+                if task_id:
+                    TaskManager.update_task(
+                        task_id,
+                        result={
+                            'progress': '测试用例生成完成，准备保存...',
+                            'cases_count': len(testcases)
+                        }
+                    )
+                
             except Exception as e:
                 # 捕获并重新抛出带有更多上下文的错误
                 error_msg = f"AI处理失败: {str(e)}"
@@ -218,7 +302,9 @@ class CaseService:
                     name=case_data.get('name', '未命名用例'),
                     level=case_data.get('level', 'P2'),
                     status='ready',
-                    content=json.dumps(case_data)
+                    content=json.dumps(case_data),
+                    task_id=task_id,  # 设置任务ID
+                    file_id=file_id   # 设置文件ID
                 )
                 cases.append(case)
                 
@@ -234,9 +320,22 @@ class CaseService:
         cls,
         file_path: str,
         project_name: str,
-        module_name: Optional[str]
+        module_name: Optional[str],
+        task_id: Optional[str] = None,
+        file_id: Optional[str] = None
     ) -> List[TestCase]:
-        """处理图片文件"""
+        """处理图片文件
+        
+        Args:
+            file_path: 文件路径
+            project_name: 项目名称
+            module_name: 模块名称
+            task_id: 任务ID
+            file_id: 文件ID
+            
+        Returns:
+            List[TestCase]: 测试用例列表
+        """
         # 创建ChatManager实例
         chat_manager = ChatManager()
         
@@ -286,7 +385,9 @@ class CaseService:
                 name=case_data.get('name', '未命名用例'),
                 level=case_data.get('level', 'P2'),
                 status='ready',
-                content=json.dumps(case_data)
+                content=json.dumps(case_data),
+                task_id=task_id,  # 设置任务ID
+                file_id=file_id  # 设置文件ID
             )
             cases.append(case)
             
@@ -348,7 +449,7 @@ class CaseService:
             # 构建基础查询
             query = select(TestCase)
             
-            # 添加查询条件
+            # 添加查询件
             conditions = []
             
             if project:

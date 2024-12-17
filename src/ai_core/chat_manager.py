@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Callable
 from .zhipu_api import ZhipuAI
 from .prompt_template import PromptTemplate
 from src.logger.logger import logger
@@ -73,9 +73,19 @@ class ChatManager:
     async def analyze_requirement(
         self, 
         content: str, 
-        image_paths: Optional[List[str]] = None
+        image_paths: Optional[List[str]] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> Optional[Dict[str, Any]]:
-        """分析需求文档"""
+        """分析需求文档
+        
+        Args:
+            content: 文本内容
+            image_paths: 图片路径列表
+            progress_callback: 进度回调函数，参数为(当前进度, 总进度)
+            
+        Returns:
+            Optional[Dict[str, Any]]: 分析结果
+        """
         try:
             logger.info(f"开始分析需求文档，图片数量: {len(image_paths) if image_paths else 0}")
             
@@ -169,6 +179,10 @@ class ChatManager:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2)  # 等待2秒后重试
                     continue
+                
+                # 更新进度
+                if progress_callback:
+                    progress_callback(attempt + 1, max_retries)
             
             if not response or not result:
                 logger.error("需求分析失败：未能获取有效响应")
@@ -298,7 +312,7 @@ class ChatManager:
         except Exception as e:
             logger.error(f"需求分析失败: {str(e)}", exc_info=True)
             return None
-
+    
     async def _process_requirement_batch(
         self,
         content: str,
@@ -306,7 +320,7 @@ class ChatManager:
     ) -> Optional[str]:
         """处理单个需求批次"""
         try:
-            logger.info(f"开始处理需求批���: {batch_type}")
+            logger.info(f"开始处理需求批次: {batch_type}")
             logger.debug(f"批次内容:\n{content}")
             
             messages = [{
@@ -376,7 +390,7 @@ class ChatManager:
         last_error = None
         for attempt in range(retry_count):
             try:
-                logger.info(f"开始生成{batch_type}次测试用例 (尝试 {attempt + 1}/{retry_count})")
+                logger.info(f"开始生成{batch_type}批次测试用例 (尝试 {attempt + 1}/{retry_count})")
                 
                 # 构建提示词
                 prompt = (
@@ -457,11 +471,21 @@ class ChatManager:
 
     @handle_exceptions(default_return=None)
     async def generate_testcases(
-        self, 
-        summary: Dict[str, Any], 
-        details: Optional[Dict[str, Any]] = None
+        self,
+        summary: Dict[str, Any],
+        details: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[str, None], None]] = None
     ) -> Optional[List[Dict[str, Any]]]:
-        """生成测试用例"""
+        """生成测试用例
+        
+        Args:
+            summary: 需求分析结果
+            details: 额外的细节信息
+            progress_callback: 进度回调函数，参数为(当前阶段, None)
+            
+        Returns:
+            Optional[List[Dict[str, Any]]]: 测试用例列表
+        """
         try:
             logger.info("开始生成测试用例")
             
@@ -499,6 +523,10 @@ class ChatManager:
             
             # 处理每个批次
             for batch in batches:
+                # 更新进度
+                if progress_callback:
+                    progress_callback(batch["type"], None)
+                    
                 batch_cases = await self._generate_batch_testcases(
                     batch_type=batch["type"],
                     batch_data=batch["data"],

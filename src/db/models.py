@@ -29,4 +29,7 @@ class TestCase(Base):
     
     # 关联关系
     file_id: Mapped[str] = mapped_column(ForeignKey("file.id"))
-    file: Mapped["File"] = relationship(back_populates="cases") 
+    file: Mapped["File"] = relationship(back_populates="cases")
+    
+    # 任务关联
+    task_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)

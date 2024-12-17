@@ -73,92 +73,58 @@ class CaseService:
         cls,
         file_id: str,
         project_name: str,
-        module_name: Optional[str]
-    ) -> List[Dict[str, Any]]:
-        """生成测试用例的具体实现"""
-        async with AsyncSessionLocal() as session:
-            try:
-                # 获取文件信息并更新状态
-                file = await FileService.get_file_by_id(file_id, session)
+        module_name: str
+    ) -> None:
+        """生成测试用例
+        
+        Args:
+            file_id: 文件ID
+            project_name: 项目名称
+            module_name: 模块名称
+        """
+        try:
+            # 获取文件信息
+            async with async_session() as session:
+                result = await session.execute(
+                    select(File).where(File.id == file_id)
+                )
+                file = result.scalar_one_or_none()
+                
                 if not file:
                     raise ValueError("文件不存在")
-                    
-                # 更新文件状态为处理中
-                await FileService.update_file_status(file, "processing", db=session)
-                await session.commit()  # 提交状态更新
                 
-                # 获取本地文件路径
-                local_file_path = await FileService.get_local_file_path(file)
+                # 生成测试用例
+                cases = await cls._process_zip_file(
+                    local_file_path=file.path,
+                    project_name=project_name,
+                    module_name=module_name,
+                    task_id=file.task_id  # 传递task_id
+                )
                 
-                # 根据文件类型处理
-                if file.type == "zip":
-                    cases = await cls._process_zip_file(local_file_path, project_name, module_name)
-                else:
-                    cases = await cls._process_image_file(local_file_path, project_name, module_name)
-                    
-                # 保存用例到��库
-                case_infos = []
-                total_cases = len(cases)
+                if not cases:
+                    raise ValueError("生成用例失败")
                 
-                # 分批处理用例
-                batch_size = 10
-                for i in range(0, total_cases, batch_size):
-                    batch = cases[i:i + batch_size]
-                    batch_infos = []
-                    
-                    for case in batch:
-                        case.file_id = file.id
-                        session.add(case)
-                    
-                    # 提交批次
-                    await session.flush()
-                    
-                    # 处理批次结果
-                    for case in batch:
-                        await session.refresh(case)
-                        case_content = json.loads(case.content)
-                        case_content['id'] = str(case.id)
-                        case.content = json.dumps(case_content)
-                        
-                        case_info = {
-                            'id': str(case.id),
-                            'project': project_name,
-                            'module': case.module,
-                            'name': case.name,
-                            'level': case.level,
-                            'status': case.status,
-                            'content': case_content
-                        }
-                        batch_infos.append(case_info)
-                    
-                    # 更新进度
-                    progress = int((i + len(batch)) / total_cases * 90)
-                    for task_id, task in TaskManager._tasks.items():
-                        if task['type'] == 'generate_cases' and task['status'] == 'running':
-                            TaskManager.update_task(task_id, progress=progress)
-                            break
-                            
-                    case_infos.extend(batch_infos)
-                    await session.commit()  # 提交每个批次
-                
-                # 更新文件状态为完成
-                await FileService.update_file_status(file, "completed", db=session)
+                # 更新文件状态
+                file.status = "success"
+                file.error = None
                 await session.commit()
                 
-                logger.info(f"成功生成 {len(case_infos)} 条用例")
-                return case_infos
-                
-            except Exception as e:
-                logger.error(f"生成用例失败: {str(e)}")
-                # 更新文件状态为失败
-                await FileService.update_file_status(
-                    file,
-                    "failed",
-                    error=str(e),
-                    db=session
+        except Exception as e:
+            error_msg = f"AI处理失败: {str(e)}"
+            logger.error(error_msg)
+            
+            # 更新文件状态
+            async with async_session() as session:
+                result = await session.execute(
+                    select(File).where(File.id == file_id)
                 )
-                await session.rollback()
-                raise
+                file = result.scalar_one_or_none()
+                if file:
+                    file.status = "failed"
+                    file.error = error_msg
+                    await session.commit()
+            
+            raise ValueError(error_msg)
     
     @classmethod
     async def _process_zip_file(
@@ -197,7 +163,7 @@ class CaseService:
                     full_path = os.path.join(FileService.UPLOAD_DIR, path)
                     # 检查文件是否存在
                     if not os.path.exists(full_path):
-                        logger.warning(f"文件��存在，跳过: {path}")
+                        logger.warning(f"文件不存在，跳过: {path}")
                         continue
                     image_files.append(full_path)
             
@@ -392,7 +358,7 @@ class CaseService:
                 conditions.append(TestCase.module == module)
                 
             if level:
-                logger.info(f"查询等级: {level}")
+                logger.info(f"查���等级: {level}")
                 conditions.append(TestCase.level == level)
                 
             # 组合所有条件

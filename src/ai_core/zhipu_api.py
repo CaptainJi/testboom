@@ -13,30 +13,20 @@ import httpx
 from src.api.services.task import TaskManager
 import aiohttp
 import asyncio
+import uuid
 
 class ZhipuAI:
     """智谱AI API封装"""
     
     def __init__(self):
         """初始化智谱AI客户端"""
-        # 配置超时时间
-        self.timeout_config = httpx.Timeout(
-            connect=30.0,     # 连接超时增加到30秒
-            read=300.0,       # 读取超时增加到5分钟
-            write=60.0,       # 写入超时增加到1分钟
-            pool=30.0         # 连接池超时增加到30秒
-        )
-        
         # 通用对话模型
         self.chat_model = ChatZhipuAI(
             api_key=settings.ai.AI_ZHIPU_API_KEY,
             model_name=settings.ai.AI_ZHIPU_MODEL_CHAT,
             temperature=0.2,
             top_p=0.2,
-            streaming=False,
-            timeout=self.timeout_config,
-            max_retries=3,     # 添加重试次数
-            request_timeout=300.0  # 总体请求超时时间
+            streaming=False
         )
         
         # 多模态模型
@@ -45,10 +35,7 @@ class ZhipuAI:
             model_name=settings.ai.AI_ZHIPU_MODEL_VISION,
             temperature=0.2,
             top_p=0.2,
-            streaming=False,
-            timeout=self.timeout_config,
-            max_retries=3,     # 添加重试次数
-            request_timeout=300.0  # 总体请求超时时间
+            streaming=False
         )
         
         self.prompt_template = PromptTemplate()
@@ -99,36 +86,91 @@ class ZhipuAI:
     )
     @handle_exceptions(default_return=None)
     async def chat(
-        self, 
-        messages: List[Dict[str, Any]], 
-        response_format: Optional[Dict[str, str]] = None
+        self,
+        messages: List[Dict[str, str]],
+        response_format: Optional[Dict[str, str]] = None,
+        timeout: Optional[int] = None
     ) -> Optional[str]:
-        """发送对话请求"""
+        """发送聊天请求
+        
+        Args:
+            messages: 消息列表
+            response_format: 响应格式
+            timeout: 超时时间（秒）
+            
+        Returns:
+            Optional[str]: 响应内容
+        """
         try:
+            logger.info("发送聊天请求 (尝试 1/3)")
+            
+            # 转换消息格式
             langchain_messages = self._convert_messages(messages)
             
+            # 添加JSON格式要求
             if response_format and response_format.get("type") == "json_object":
                 langchain_messages.insert(0, SystemMessage(content="请以JSON格式返回响应"))
             
-            logger.info(f"发送对话请求，消息数: {len(messages)}")
-            response = await self.chat_model.ainvoke(
-                langchain_messages, 
-                response_format=response_format if response_format else None
-            )
-            
-            result = response.content if isinstance(response, AIMessage) else response
-            if result:
-                logger.debug(f"收到模型响应:\n{result}")
-                return result
+            # 设置超时时间
+            if timeout:
+                # 创建新的超时配置
+                timeout_config = httpx.Timeout(
+                    connect=30.0,
+                    read=float(timeout),
+                    write=60.0,
+                    pool=30.0
+                )
+                # 创建新的模型实例
+                chat_model = ChatZhipuAI(
+                    api_key=settings.ai.AI_ZHIPU_API_KEY,
+                    model_name=settings.ai.AI_ZHIPU_MODEL_CHAT,
+                    temperature=0.2,
+                    top_p=0.2,
+                    streaming=False,
+                    timeout=timeout_config,
+                    max_retries=3
+                )
             else:
-                logger.warning("模型未返回有效响应")
+                chat_model = self.chat_model
+            
+            # 使用chat_model发送请求
+            try:
+                response = await chat_model.ainvoke(
+                    langchain_messages,
+                    response_format=response_format if response_format else None
+                )
+                
+                # 提取响应内容
+                result = response.content if isinstance(response, AIMessage) else response
+                if not result:
+                    logger.error("响应内容为空")
+                    return None
+                
+                return result
+                
+            except asyncio.TimeoutError as e:
+                logger.error(f"请求超时: {str(e)}", exc_info=True)
                 return None
                 
-        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-            logger.error(f"请求超时: {str(e)}")
-            raise
+            except httpx.HTTPError as e:
+                logger.error(f"HTTP请求错误: {str(e)}")
+                logger.error(f"状态码: {e.response.status_code if hasattr(e, 'response') else 'unknown'}")
+                logger.error(f"响应内容: {e.response.text if hasattr(e, 'response') else 'unknown'}")
+                return None
+                
+            except Exception as e:
+                logger.error(f"请求失败: {str(e)}", exc_info=True)
+                # 尝试提取更多错误信息
+                error_info = {}
+                for attr in ['response', 'message', 'args', 'code', 'reason']:
+                    if hasattr(e, attr):
+                        error_info[attr] = getattr(e, attr)
+                if error_info:
+                    logger.error(f"错误详情: {json.dumps(error_info, ensure_ascii=False)}")
+                return None
+                
         except Exception as e:
-            logger.error(f"对话请求失败: {str(e)}")
+            logger.error(f"外部错误: {str(e)}", exc_info=True)
             return None
     
     @retry(
@@ -179,18 +221,20 @@ class ZhipuAI:
                     logger.warning(f"跳过处理失败的图片: {path}")
                     continue
                     
-                user_message = {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        image_content
-                    ]
-                }
+                # 构建多模态消息内容
+                multimodal_content = [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    image_content
+                ]
                 
                 logger.debug(f"发送图片分析请求: {path}")
                 try:
+                    # 使用vision_model处理请求
                     response = await self.vision_model.ainvoke(
-                        [user_message],
+                        [HumanMessage(content=multimodal_content)],
                         response_format={"type": "json_object"}
                     )
                     
@@ -219,31 +263,8 @@ class ZhipuAI:
                 
             logger.info(f"成功处理 {len(all_results)}/{total_images} 张图片")
             
-            if len(all_results) == 1:
-                return json.dumps(all_results[0], ensure_ascii=False)
-            
-            logger.info("开始生成多图片分析总结")
-            summary_prompt = self.prompt_template.render(
-                "requirement_summary", 
-                content=json.dumps(all_results, ensure_ascii=False)
-            )
-            
-            if not summary_prompt:
-                logger.warning("获取总结提示词失败，将返回原始结果")
-                return json.dumps(all_results, ensure_ascii=False)
-                
-            logger.debug("发送总结请求")
-            summary_response = await self.chat(
-                [{"role": "user", "content": summary_prompt}],
-                response_format={"type": "json_object"}
-            )
-            
-            if summary_response:
-                logger.info("成功生成分析总结")
-                return summary_response
-            else:
-                logger.warning("生成总结失败，返回原始结果")
-                return json.dumps(all_results, ensure_ascii=False)
+            # 直接返回第一个结果
+            return json.dumps(all_results[0], ensure_ascii=False)
                 
         except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
             logger.error(f"请求超时: {str(e)}")

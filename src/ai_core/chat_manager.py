@@ -7,9 +7,10 @@ from src.utils.common import safe_json_loads
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.memory import BaseMemory
-from langchain.memory import ChatMessageHistory
+from langchain_community.chat_message_histories import ChatMessageHistory
 from pydantic import Field
 import json
+import asyncio
 
 class ChatMemory(BaseMemory):
     """自定义聊天记忆管理"""
@@ -96,9 +97,39 @@ class ChatManager:
             messages = [{
                 "role": "system",
                 "content": (
-                    "你是一个专业的需求分析专家。请仔细分析需求文档，提取关键信息并生成结构化的分析结果。"
-                    "分析要点包括：功能需求、非功能需求、业务规则、用户界面等。"
-                    "请确保返回的是格式正确的JSON对象。"
+                    "你是一个专业的需求分析专家。请仔细分析需求文档中的图片，提取关键信息并生成结构化的分析结果。\n"
+                    "分析要点和返回格式要求：\n"
+                    "{\n"
+                    "  \"需求背景\": {\n"
+                    "    \"项目背景\": \"项目的具体业务场景和目标\",\n"
+                    "    \"业务目标\": [\"目标1\", \"目标2\"],\n"
+                    "    \"主要痛点\": [\"痛点1\", \"痛点2\"],\n"
+                    "    \"解决方案\": \"具体的解决方案\"\n"
+                    "  },\n"
+                    "  \"整体功能架构\": {\n"
+                    "    \"系统模块\": [\"模块1\", \"模块2\"],\n"
+                    "    \"功能结构\": [\"功能1\", \"功能2\"],\n"
+                    "    \"核心功能\": [\"功能1\", \"功能2\"],\n"
+                    "    \"辅助功能\": [\"功能1\", \"功能2\"]\n"
+                    "  },\n"
+                    "  \"核心业务流程\": {\n"
+                    "    \"业务场景\": [\"场景1\", \"场景2\"],\n"
+                    "    \"操作步骤\": [\"步骤1\", \"步骤2\"],\n"
+                    "    \"业务规则\": [\"规则1\", \"规则2\"],\n"
+                    "    \"处理逻辑\": [\"逻辑1\", \"逻辑2\"]\n"
+                    "  },\n"
+                    "  \"系统交互关系\": {\n"
+                    "    \"交互流程\": [\"流程1\", \"流程2\"],\n"
+                    "    \"模块调用\": [\"调用1\", \"调用2\"],\n"
+                    "    \"数据传递\": [\"数据流1\", \"数据流2\"],\n"
+                    "    \"接口依赖\": [\"依赖1\", \"依赖2\"]\n"
+                    "  }\n"
+                    "}\n\n"
+                    "注意事项：\n"
+                    "1. 必须基于图片内容进行分析，不要使用通用模板\n"
+                    "2. 确保返回完整的 JSON 格式\n"
+                    "3. 字段名称必须与示例格式完全一致\n"
+                    "4. 分析要全面但简洁，避免冗长"
                 )
             }]
             
@@ -111,25 +142,48 @@ class ChatManager:
             
             logger.debug(f"发送消息到AI:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
             
-            # 发送请求
-            response = await (
-                self.ai.chat_with_images(messages, image_paths) if image_paths
-                else self.ai.chat(messages, response_format={"type": "json_object"})
-            )
+            # 发送请求，最多重试3次
+            response = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = await (
+                        self.ai.chat_with_images(messages, image_paths) if image_paths
+                        else self.ai.chat(messages, response_format={"type": "json_object"})
+                    )
+                    
+                    if not response:
+                        logger.warning(f"第{attempt + 1}次尝试未收到响应")
+                        continue
+                        
+                    # 尝试解析JSON
+                    result = safe_json_loads(response)
+                    if result:
+                        logger.info(f"第{attempt + 1}次尝试成功解析响应")
+                        break
+                    
+                    logger.warning(f"第{attempt + 1}次尝试解析JSON失败")
+                    
+                except Exception as e:
+                    logger.error(f"第{attempt + 1}次尝试失败: {str(e)}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2)  # 等待2秒后重试
+                    continue
             
-            if not response:
-                logger.error("需求分析失败：未收到有效响应")
+            if not response or not result:
+                logger.error("需求分析失败：未能获取有效响应")
                 return None
             
             logger.debug(f"收到AI响应:\n{response[:200]}...")
             
-            # 解析响应
-            result = safe_json_loads(response)
-            if not result:
-                logger.error("需求分析失败：响应格式错误")
-                return None
-            
-            logger.debug(f"解析后的结果:\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+            # 检查结果格式并转换
+            if isinstance(result, list):
+                logger.debug("收到列表格式的响应，将合并结果")
+                if not result:
+                    logger.error("需求分析失败：响应列表为空")
+                    return None
+                # 使用第一个结果作为基础
+                result = result[0]
             
             # 检查结果格式
             if not isinstance(result, dict):
@@ -143,6 +197,9 @@ class ChatManager:
             elif "answer" in result:
                 result = result["answer"]
                 logger.debug("从 answer 字段中提取结果")
+            elif "需求分析报告" in result:
+                result = result["需求分析报告"]
+                logger.debug("从 需求分析报告 字段中提取结果")
             
             # 标准化字段名称（移除序号前缀）
             normalized_result = {}
@@ -153,11 +210,81 @@ class ChatManager:
             
             logger.debug(f"标准化后的结果:\n{json.dumps(normalized_result, ensure_ascii=False, indent=2)}")
             
+            # 检查必要字段
             required_fields = ['整体功能架构', '核心业务流程', '系统交互关系']
+            if image_paths:
+                required_fields.append('需求背景')  # 移除关联信息的强制要求
+            
             missing_fields = [field for field in required_fields if field not in normalized_result]
             if missing_fields:
-                logger.error(f"需求分析失败：缺少必要字段 - {missing_fields}")
-                return None
+                # 如果缺少字段，尝试从原始响应中提取更多信息
+                for key in result.keys():
+                    clean_key = key.split(". ")[-1] if ". " in key else key
+                    # 检查是否有相似的字段名
+                    for required_field in missing_fields[:]:
+                        if (required_field in clean_key.lower() or 
+                            clean_key.lower() in required_field.lower()):
+                            normalized_result[required_field] = result[key]
+                            missing_fields.remove(required_field)
+                
+                # 再次检查是否还有缺失字段
+                if missing_fields:
+                    logger.warning(f"需求分析缺少字段 - {missing_fields}，但将继续处理")
+            
+            # 如果是多图片分析，进行汇总
+            if image_paths and len(image_paths) > 1:
+                logger.info("开始生成多图片分析总结")
+                summary_prompt = self.template.render(
+                    "requirement_batch_summary",
+                    content=json.dumps(normalized_result, ensure_ascii=False)
+                )
+                
+                if summary_prompt:
+                    try:
+                        # 构建总结消息
+                        summary_messages = [{
+                            "role": "system",
+                            "content": (
+                                "你是一个专业的需求分析专家。请对多张需求图片的分析结果进行总结。\n"
+                                "要求：\n"
+                                "1. 合并相同或相似的功能点\n"
+                                "2. 解决可能的冲突点\n"
+                                "3. 保持关键信息的完整性\n"
+                                "4. 确保返回完整的JSON格式\n"
+                                "5. 控制返回内容的大小，避免过于冗长"
+                            )
+                        }, {
+                            "role": "user",
+                            "content": summary_prompt
+                        }]
+                        
+                        # 使用普通大模型进行总结
+                        logger.info("使用普通大模型生成总结")
+                        summary_response = await self.ai.chat(
+                            summary_messages,
+                            response_format={"type": "json_object"},
+                            timeout=180  # 减少到3分钟，因为是文本处理
+                        )
+                        
+                        if summary_response:
+                            summary_result = safe_json_loads(summary_response)
+                            if summary_result and isinstance(summary_result, dict):
+                                logger.info("成功生成多图片分析总结")
+                                # 保留原始分析中的某些字段
+                                for key in ['需求背景', '关联信息']:
+                                    if key in normalized_result and key not in summary_result:
+                                        summary_result[key] = normalized_result[key]
+                                normalized_result = summary_result
+                                logger.debug(f"总结果:\n{json.dumps(summary_result, ensure_ascii=False, indent=2)}")
+                            else:
+                                logger.warning("总结结果解析失败，将使用原始分析结果")
+                                logger.debug(f"无效的总结响应:\n{summary_response[:200]}...")
+                        else:
+                            logger.warning("未收到总结响应，将使用原始分析结果")
+                            
+                    except Exception as e:
+                        logger.error(f"生成总结时出错: {str(e)}")
+                        logger.warning("将使用原始分析结果")
             
             # 更新记忆
             self.memory.save_context(
@@ -165,7 +292,7 @@ class ChatManager:
                 {"output": json.dumps(normalized_result, ensure_ascii=False)}
             )
             
-            logger.info("需求分析��成")
+            logger.info("需求分析完成")
             return normalized_result
             
         except Exception as e:
@@ -179,13 +306,13 @@ class ChatManager:
     ) -> Optional[str]:
         """处理单个需求批次"""
         try:
-            logger.info(f"开始处理需求批次: {batch_type}")
+            logger.info(f"开始处理需求批���: {batch_type}")
             logger.debug(f"批次内容:\n{content}")
             
             messages = [{
                 "role": "system",
                 "content": (
-                    f"你是一个专业的测试用例设计专家。现在请专注分析需求中的{batch_type}部分。"
+                    f"你是一个专业的测试用例设计专家。现请专注分析需求中的{batch_type}部分。"
                     "请结合之前的上下文，确保分析的连续性和完整性。"
                     "返回格式应为JSON对象。"
                 )
@@ -231,7 +358,8 @@ class ChatManager:
         batch_type: str,
         batch_data: Dict[str, Any],
         focus: str,
-        retry_count: int = 3
+        retry_count: int = 3,
+        retry_delay: int = 5
     ) -> Optional[List[Dict[str, Any]]]:
         """生成单个批次的测试用例
         
@@ -240,14 +368,19 @@ class ChatManager:
             batch_data: 批次数据
             focus: 关注点
             retry_count: 重试次数
+            retry_delay: 重试延迟(秒)
             
         Returns:
             Optional[List[Dict[str, Any]]]: 测试用例列表
         """
+        last_error = None
         for attempt in range(retry_count):
             try:
+                logger.info(f"开始生成{batch_type}次测试用例 (尝试 {attempt + 1}/{retry_count})")
+                
+                # 构建提示词
                 prompt = (
-                    f"请基于以下{batch_type}信息生成测试用例：\n\n"
+                    f"请基于下{batch_type}信息生成测试用例：\n\n"
                     f"{json.dumps({batch_type: batch_data}, ensure_ascii=False, indent=2)}\n\n"
                     "要求：\n"
                     f"1. 重点关注{focus}\n"
@@ -270,6 +403,7 @@ class ChatManager:
                     "}"
                 )
                 
+                # 发送请求
                 response = await self.ai.chat(
                     [{
                         "role": "system",
@@ -278,22 +412,47 @@ class ChatManager:
                         "role": "user",
                         "content": prompt
                     }],
-                    response_format={"type": "json_object"}
+                    response_format={"type": "json_object"},
+                    timeout=180  # 增加超时时间到3分钟
                 )
                 
-                if response:
-                    result = safe_json_loads(response)
-                    if result and isinstance(result.get("testcases"), list):
-                        return result["testcases"]
+                if not response:
+                    logger.warning(f"{batch_type}批次生成失败，尝试次数: {attempt + 1}")
+                    if attempt < retry_count - 1:
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    return None
                 
-                logger.warning(f"{batch_type}批次生成失败，尝试次数: {attempt + 1}")
+                # 解析响应
+                result = safe_json_loads(response)
+                if not result:
+                    logger.error(f"{batch_type}批次响应解析失败")
+                    if attempt < retry_count - 1:
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    return None
+                
+                # 验证测试用例格式
+                testcases = result.get("testcases")
+                if not isinstance(testcases, list):
+                    logger.error(f"{batch_type}批次响应格式错误")
+                    if attempt < retry_count - 1:
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    return None
+                
+                logger.info(f"成功生成{batch_type}批次测试用例，数量: {len(testcases)}")
+                return testcases
                 
             except Exception as e:
-                logger.error(f"{batch_type}批次生成出错: {str(e)}")
-                if attempt == retry_count - 1:
-                    logger.error(f"{batch_type}批次生成失败，已达最大重试次数")
-                    return None
+                last_error = e
+                logger.error(f"{batch_type}批次生成出错 (尝试 {attempt + 1}/{retry_count}): {str(e)}")
+                if attempt < retry_count - 1:
+                    await asyncio.sleep(retry_delay)
+                    continue
         
+        if last_error:
+            logger.error(f"{batch_type}批次生成最终失败: {str(last_error)}")
         return None
 
     @handle_exceptions(default_return=None)

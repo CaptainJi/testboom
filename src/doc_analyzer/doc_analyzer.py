@@ -5,6 +5,7 @@ import pandas as pd
 from ..ai_core.chat_manager import ChatManager
 from ..logger.logger import logger
 from .file_processor import FileProcessor
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 class DocAnalyzer:
     """文档分析器
@@ -195,14 +196,18 @@ class DocAnalyzer:
             # 转换测试用例格式
             data = []
             for tc in testcases:
+                # 为步骤和预期结果添加项目符号
+                steps = [f"• {step}" for step in tc.get('steps', [])]
+                expected = [f"• {exp}" for exp in tc.get('expected', [])]
+                
                 data.append({
                     '用例ID': tc.get('id', ''),
                     '所属模块': tc.get('module', ''),
                     '用例名称': tc.get('name', ''),
                     '用例等级': tc.get('level', ''),
                     '前置条件': tc.get('precondition', ''),
-                    '测试步骤': '\n'.join(tc.get('steps', [])),
-                    '预期结果': '\n'.join(tc.get('expected', [])),
+                    '测试步骤': '\n'.join(steps),
+                    '预期结果': '\n'.join(expected),
                     '实际结果': '',
                     '测试状态': '未执行',
                     '备注': tc.get('notes', '')
@@ -210,7 +215,77 @@ class DocAnalyzer:
             
             # 创建DataFrame并导出
             df = pd.DataFrame(data)
-            df.to_excel(output_path, index=False, engine='openpyxl')
+            
+            # 创建Excel writer对象
+            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                # 写入数据
+                df.to_excel(writer, index=False, sheet_name='测试用例')
+                
+                # 获取工作簿和工作表
+                workbook = writer.book
+                worksheet = writer.sheets['测试用例']
+                
+                # 定义样式
+                header_fill = PatternFill(start_color='CCE5FF', end_color='CCE5FF', fill_type='solid')
+                header_font = Font(bold=True, size=11)
+                header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                cell_alignment = Alignment(vertical='center', wrap_text=True)
+                border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+                
+                # 设置列宽
+                column_widths = {
+                    'A': 12,  # 用例ID
+                    'B': 15,  # 所属模块
+                    'C': 20,  # 用例名称
+                    'D': 10,  # 用例等级
+                    'E': 25,  # 前置条件
+                    'F': 40,  # 测试步骤
+                    'G': 40,  # 预期结果
+                    'H': 15,  # 实际结果
+                    'I': 12,  # 测试状态
+                    'J': 20,  # 备注
+                }
+                
+                for col, width in column_widths.items():
+                    worksheet.column_dimensions[col].width = width
+                
+                # 应用表头样式
+                for cell in worksheet[1]:
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = header_alignment
+                    cell.border = border
+                
+                # 获取数据范围
+                data_rows = len(df) + 1
+                data_cols = len(df.columns)
+                
+                # 应用数据单元格样式
+                for row in range(2, data_rows + 1):
+                    # 设置行高
+                    worksheet.row_dimensions[row].height = 30
+                    
+                    # 设置交替行背景色
+                    row_fill = PatternFill(
+                        start_color='F5F5F5' if row % 2 == 0 else 'FFFFFF',
+                        end_color='F5F5F5' if row % 2 == 0 else 'FFFFFF',
+                        fill_type='solid'
+                    )
+                    
+                    for col in range(1, data_cols + 1):
+                        cell = worksheet.cell(row=row, column=col)
+                        cell.alignment = cell_alignment
+                        cell.border = border
+                        cell.fill = row_fill
+                
+                # 冻结首行
+                worksheet.freeze_panes = 'A2'
+                
             logger.info(f"测试用例已导出到: {output_path}")
             
         except Exception as e:

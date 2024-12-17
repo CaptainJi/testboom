@@ -50,6 +50,7 @@ class ExportRequest(BaseModel):
     case_ids: Optional[List[str]] = None
     project_name: Optional[str] = None
     module_name: Optional[str] = None
+    task_id: Optional[str] = None
 
 @router.post("/export/excel")
 async def export_cases_excel(
@@ -76,6 +77,15 @@ async def export_cases_excel(
                 if case:
                     case_data = json.loads(case.content)
                     cases.append(case_data)
+        elif request.task_id:
+            # 根据任务ID导出用例
+            cases_from_db = await CaseService.list_cases(
+                db,
+                task_id=request.task_id
+            )
+            for case in cases_from_db:
+                case_data = json.loads(case.content)
+                cases.append(case_data)
         else:
             # 根据项目或模块导出用例
             cases_from_db = await CaseService.list_cases(
@@ -100,6 +110,8 @@ async def export_cases_excel(
             filename_parts.append(request.project_name)
         if request.module_name:
             filename_parts.append(request.module_name)
+        if request.task_id:
+            filename_parts.append(f"task_{request.task_id}")
         filename_parts.append(str(int(time.time())))
         
         filename = f"testcases_{'_'.join(filename_parts)}.xlsx"
@@ -153,6 +165,74 @@ async def generate_cases(
     except Exception as e:
         logger.error(f"用例生成失败: {str(e)}")
         raise HTTPException(status_code=500, detail="用例生成失败")
+
+@router.get("/tasks")
+async def list_tasks(
+    type: Optional[str] = None,
+    status: Optional[str] = None,
+    skip: Optional[str] = None,
+    limit: Optional[str] = None
+) -> ResponseModel[List[TaskInfo]]:
+    """获取任务列表
+    
+    Args:
+        type: 任务类型过滤
+        status: 任务状态过滤
+        skip: 跳过的记录数，默认0
+        limit: 返回的最大记录数，默认10，最大100
+        
+    Returns:
+        ResponseModel[List[TaskInfo]]: 任务列表
+    """
+    try:
+        # 处理分页参数
+        try:
+            skip_val = int(skip) if skip and skip.strip() else 0
+            limit_val = int(limit) if limit and limit.strip() else 10
+        except ValueError:
+            skip_val = 0
+            limit_val = 10
+            
+        # 验证参数范围
+        skip_val = max(0, skip_val)  # 确保不小于0
+        limit_val = max(1, min(100, limit_val))  # 确保在1-100之间
+        
+        # 获取任务列表
+        tasks = TaskManager.list_tasks(
+            type=type, 
+            status=status, 
+            skip=skip_val,
+            limit=limit_val
+        )
+        
+        # 转换为响应模型
+        task_infos = []
+        for task in tasks:
+            # 转换任务结果
+            result = None
+            if task.get('result'):
+                if isinstance(task['result'], dict) and task['result'].get('progress'):
+                    result = task['result']
+                else:
+                    result = task['result']
+            
+            task_info = TaskInfo(
+                task_id=task['id'],
+                type=task['type'],
+                status=task['status'],
+                progress=task['progress'],
+                result=result,
+                error=task.get('error'),
+                created_at=task['created_at'].isoformat(),
+                updated_at=task['updated_at'].isoformat()
+            )
+            task_infos.append(task_info)
+            
+        return ResponseModel(data=task_infos)
+        
+    except Exception as e:
+        logger.error(f"获取任务列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取任务列表失败")
 
 @router.get("/tasks/{task_id}")
 async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
@@ -215,61 +295,6 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
         logger.error(f"获取任务状态失败: {str(e)}")
         raise HTTPException(status_code=500, detail="获取任务状态失败")
 
-@router.get("/")
-async def list_cases(
-    project: Optional[str] = None,
-    module: Optional[str] = None,
-    level: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
-) -> ResponseModel[List[CaseInfo]]:
-    """获取用例列表"""
-    try:
-        # 记录请求参数
-        logger.info(f"接收查询请求: project={project}, module={module}, level={level}")
-        
-        # 获取用例列表
-        cases = await CaseService.list_cases(
-            db,
-            project=project,
-            module=module,
-            level=level
-        )
-        
-        # 转换为应模型
-        case_infos = []
-        for case in cases:
-            try:
-                content = json.loads(case.content)
-                # 记录每个用例的project字段
-                logger.debug(f"用例[{case.id}] project字段: {content.get('project', '')}")
-                
-                case_infos.append(
-                    CaseInfo(
-                        case_id=case.id,
-                        project=content.get('project', ''),
-                        module=case.module,
-                        name=case.name,
-                        level=case.level,
-                        status=case.status,
-                        content=content
-                    )
-                )
-            except json.JSONDecodeError:
-                logger.error(f"解析用例内容失败: {case.content}")
-                continue
-        
-        # 记录查询结果
-        logger.info(f"查询到 {len(case_infos)} 条用例记录")
-        if not case_infos:
-            logger.warning(f"未找到匹配的用例: project={project}, module={module}, level={level}")
-        
-        response = ResponseModel(data=case_infos)
-        return response
-        
-    except Exception as e:
-        logger.error(f"获取用例列表失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="获取用例列表失败")
-
 @router.get("/{case_id}")
 async def get_case(
     case_id: str,
@@ -314,4 +339,61 @@ async def get_case(
         raise
     except Exception as e:
         logger.error(f"获取用例详情失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="获取用例详情失败") 
+        raise HTTPException(status_code=500, detail="获取用例详情失败")
+
+@router.get("/")
+async def list_cases(
+    project: Optional[str] = None,
+    module: Optional[str] = None,
+    level: Optional[str] = None,
+    task_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[List[CaseInfo]]:
+    """获取用例列表"""
+    try:
+        # 记录请求参数
+        logger.info(f"接收查询请求: project={project}, module={module}, level={level}, task_id={task_id}")
+        
+        # 获取用例列表
+        cases = await CaseService.list_cases(
+            db,
+            project=project,
+            module=module,
+            level=level,
+            task_id=task_id
+        )
+        
+        # 转换为应用模型
+        case_infos = []
+        for case in cases:
+            try:
+                content = json.loads(case.content)
+                # 记录每个用例的project字段
+                logger.debug(f"用例[{case.id}] project字段: {content.get('project', '')}")
+                
+                case_infos.append(
+                    CaseInfo(
+                        case_id=case.id,
+                        project=content.get('project', ''),
+                        module=case.module,
+                        name=case.name,
+                        level=case.level,
+                        status=case.status,
+                        content=content
+                    )
+                )
+            except json.JSONDecodeError:
+                logger.error(f"解析用例内容失败: {case.content}")
+                continue
+        
+        # 记录查询结果
+        logger.info(f"查询到 {len(case_infos)} 条用例记录")
+        if not case_infos:
+            logger.warning(f"未找到匹配的用例: project={project}, module={module}, level={level}, task_id={task_id}")
+        
+        response = ResponseModel(data=case_infos)
+        return response
+        
+    except Exception as e:
+        logger.error(f"获取用例列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取用例列表失败") 

@@ -432,15 +432,17 @@ class CaseService:
         db: AsyncSession,
         project: Optional[str] = None,
         module: Optional[str] = None,
-        level: Optional[str] = None
+        level: Optional[str] = None,
+        task_id: Optional[str] = None
     ) -> List[TestCase]:
-        """获取用例表
+        """获取用例列表
         
         Args:
             db: 数据库会话
             project: 项目名称
             module: 模块名称
             level: 用例等级
+            task_id: 任务ID
             
         Returns:
             List[TestCase]: 用例列表
@@ -449,13 +451,12 @@ class CaseService:
             # 构建基础查询
             query = select(TestCase)
             
-            # 添加查询件
+            # 添加查询条件
             conditions = []
             
             if project:
                 # 记录查询条件
                 logger.info(f"查询项目: {project}")
-                # 使用 project 字段查询
                 conditions.append(TestCase.project == project)
                 
             if module:
@@ -465,6 +466,10 @@ class CaseService:
             if level:
                 logger.info(f"查询等级: {level}")
                 conditions.append(TestCase.level == level)
+                
+            if task_id:
+                logger.info(f"查询任务: {task_id}")
+                conditions.append(TestCase.task_id == task_id)
                 
             # 组合所有条件
             if conditions:

@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 import asyncio
 from loguru import logger
@@ -141,6 +141,48 @@ class TaskManager:
         
         # 应用更新
         task.update(updates)
+    
+    @classmethod
+    def list_tasks(
+        cls,
+        type: Optional[str] = None,
+        status: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """获取任务列表
+        
+        Args:
+            type: 任务类型过滤
+            status: 任务状态过滤
+            skip: 跳过的记录数
+            limit: 返回的最大记录数
+            
+        Returns:
+            List[Dict[str, Any]]: 任务列表
+        """
+        try:
+            # 获取所有任务
+            tasks = list(cls._tasks.values())
+            
+            # 应用过滤条件
+            if type:
+                tasks = [t for t in tasks if t.get('type') == type]
+            if status:
+                tasks = [t for t in tasks if t.get('status') == status]
+            
+            # 按更新时间倒序排序
+            tasks.sort(key=lambda x: x.get('updated_at', datetime.min), reverse=True)
+            
+            # 应用分页
+            start = min(skip, len(tasks))
+            end = min(start + limit, len(tasks))
+            
+            return tasks[start:end]
+            
+        except Exception as e:
+            logger.error(f"获取任务列表失败: {str(e)}")
+            return []
     
     @classmethod
     def run_background_task(

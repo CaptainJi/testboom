@@ -84,7 +84,7 @@ class CaseService:
         """
         try:
             # 获取文件信息
-            async with async_session() as session:
+            async with AsyncSessionLocal() as session:
                 result = await session.execute(
                     select(File).where(File.id == file_id)
                 )
@@ -95,14 +95,18 @@ class CaseService:
                 
                 # 生成测试用例
                 cases = await cls._process_zip_file(
-                    local_file_path=file.path,
+                    file_paths=file.path,
                     project_name=project_name,
-                    module_name=module_name,
-                    task_id=file.task_id  # 传递task_id
+                    module_name=module_name
                 )
                 
                 if not cases:
                     raise ValueError("生成用例失败")
+                
+                # 保存测试用例
+                for case in cases:
+                    case.file_id = file_id
+                    session.add(case)
                 
                 # 更新文件状态
                 file.status = "success"
@@ -114,7 +118,7 @@ class CaseService:
             logger.error(error_msg)
             
             # 更新文件状态
-            async with async_session() as session:
+            async with AsyncSessionLocal() as session:
                 result = await session.execute(
                     select(File).where(File.id == file_id)
                 )
@@ -358,7 +362,7 @@ class CaseService:
                 conditions.append(TestCase.module == module)
                 
             if level:
-                logger.info(f"查���等级: {level}")
+                logger.info(f"查询等级: {level}")
                 conditions.append(TestCase.level == level)
                 
             # 组合所有条件

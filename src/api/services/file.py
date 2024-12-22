@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -63,7 +63,7 @@ class FileService:
                                         if os.path.splitext(filename)[1].lower() in {'.png', '.jpg', '.jpeg'}:
                                             img_path = os.path.join(root, filename)
                                             if storage_service.enabled:
-                                                # 上传到对象存储
+                                                # 上传��对象存储
                                                 url = await storage_service.upload_file(img_path)
                                                 paths.append(url)
                                             else:
@@ -85,7 +85,7 @@ class FileService:
                         url = await storage_service.upload_file(temp_file_path)
                         paths.append(url)
                     else:
-                        # 移动到本地存储
+                        # 移动本地存储
                         dest_path = os.path.join(cls.UPLOAD_DIR, unique_name)
                         shutil.move(temp_file_path, dest_path)
                         paths.append(unique_name)  # 存储相对路径
@@ -174,44 +174,168 @@ class FileService:
     async def get_files(
         cls,
         db: AsyncSession,
-        skip: int = 0,
-        limit: int = 10,
+        page: int = 1,
+        page_size: int = 10,
         status: Optional[str] = None
-    ) -> tuple[List[dict], int]:
-        """获取文件列表"""
+    ) -> Tuple[List[File], int]:
+        """获取文件列表
+        
+        Args:
+            db: 数据库会话
+            page: 页码(从1开始)
+            page_size: 每页数量
+            status: 文件状态过滤
+            
+        Returns:
+            Tuple[List[File], int]: 文件列表和总数
+        """
         try:
-            # 构建基础查询
-            base_query = select(File)
+            # 构建查询
+            query = select(File)
+            
+            # 添加状态过滤
             if status:
-                base_query = base_query.where(File.status == status)
+                query = query.where(File.status == status)
+            
+            # 添加排序(按创建时间倒序)
+            query = query.order_by(File.created_at.desc())
+            
+            # 计算分页
+            skip = (page - 1) * page_size
             
             # 获取总数
-            count_query = select(func.count()).select_from(base_query.subquery())
-            total = await db.scalar(count_query)
+            total = await db.scalar(select(func.count()).select_from(query.subquery()))
             
-            # 获取分页数据
-            query = base_query.offset(skip).limit(limit).order_by(File.id.desc())
+            # 添加分页
+            query = query.offset(skip).limit(page_size)
+            
+            # 执行查询
             result = await db.execute(query)
-            db_files = result.scalars().all()
+            files = result.scalars().all()
             
-            # 转换文件记录
-            files = []
-            for file in db_files:
-                file_dict = {
-                    "id": file.id,
-                    "name": file.name,
-                    "type": file.type,
-                    "status": file.status,
-                    "error": file.error,
-                    "path": file.path,  # 不再转换为列表
-                    "created_at": file.created_at,
-                    "updated_at": file.updated_at
-                }
-                files.append(file_dict)
-            
-            logger.info(f"获取文件列表成功: {len(files)}/{total} 条记录")
             return files, total
             
         except Exception as e:
             logger.error(f"获取文件列表失败: {str(e)}")
+            raise
+    
+    @classmethod
+    async def delete_file(
+        cls,
+        file_id: str,
+        db: AsyncSession
+    ) -> bool:
+        """删除文件
+        
+        Args:
+            file_id: 文件ID
+            db: 数据库会话
+            
+        Returns:
+            bool: 是否删除成功
+        """
+        try:
+            # 获取文件信息
+            file = await cls.get_file_by_id(file_id, db)
+            if not file:
+                raise ValueError("文件不存在")
+            
+            # 获取存储服务
+            storage_service = get_storage_service()
+            
+            # 删除存储中的文件
+            if storage_service.enabled:
+                # 处理可能存在的多个文件路径
+                for path in cls._path_to_list(file.path):
+                    if path.startswith('http://') or path.startswith('https://'):
+                        # 从URL中提取对象名称
+                        object_name = path.split('/')[-1]
+                        await storage_service.delete_file(object_name)
+            else:
+                # 删除本地文件
+                for path in cls._path_to_list(file.path):
+                    full_path = os.path.join(cls.UPLOAD_DIR, path)
+                    if os.path.exists(full_path):
+                        os.remove(full_path)
+            
+            # 删除数据库记录
+            await db.delete(file)
+            await db.commit()
+            
+            logger.info(f"文件删除成功: {file_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"文件删除失败: {str(e)}")
+            raise
+
+    @classmethod
+    async def batch_delete_files(
+        cls,
+        file_ids: List[str],
+        db: AsyncSession
+    ) -> Dict[str, bool]:
+        """批量删除文件
+        
+        Args:
+            file_ids: 文件ID列表
+            db: 数据库会话
+            
+        Returns:
+            Dict[str, bool]: 每个文件的删除结果
+        """
+        results = {}
+        for file_id in file_ids:
+            try:
+                success = await cls.delete_file(file_id, db)
+                results[file_id] = success
+            except Exception as e:
+                logger.error(f"删除文件失败 {file_id}: {str(e)}")
+                results[file_id] = False
+        return results
+
+    @classmethod
+    async def update_file(
+        cls,
+        file_id: str,
+        name: Optional[str] = None,
+        status: Optional[str] = None,
+        error: Optional[str] = None,
+        db: AsyncSession = None
+    ) -> Optional[File]:
+        """更新文件信息
+        
+        Args:
+            file_id: 文件ID
+            name: 新的文件名
+            status: 新的状态
+            error: 错误信息
+            db: 数据库会话
+            
+        Returns:
+            Optional[File]: 更新后的文件信息
+        """
+        try:
+            # 获取文件信息
+            file = await cls.get_file_by_id(file_id, db)
+            if not file:
+                raise ValueError("文件不存在")
+            
+            # 更新字段
+            if name is not None:
+                file.name = name
+            if status is not None:
+                file.status = status
+            if error is not None:
+                file.error = error
+            
+            # 保存更新
+            await db.commit()
+            await db.refresh(file)
+            
+            logger.info(f"文件信息更新成功: {file_id}")
+            return file
+            
+        except Exception as e:
+            logger.error(f"文件信息更新失败: {str(e)}")
             raise

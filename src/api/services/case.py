@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.db.models import TestCase, File
@@ -16,6 +16,7 @@ import asyncio
 from pathlib import Path
 import uuid
 import httpx
+from sqlalchemy import func
 
 class CaseService:
     """用例服务"""
@@ -426,67 +427,182 @@ class CaseService:
             logger.error(f"获取用例失败: {str(e)}")
             raise
     
-    @classmethod
+    @staticmethod
     async def list_cases(
-        cls,
         db: AsyncSession,
         project: Optional[str] = None,
         module: Optional[str] = None,
-        level: Optional[str] = None,
-        task_id: Optional[str] = None
-    ) -> List[TestCase]:
-        """获取用例列表
+        task_id: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 10
+    ) -> Tuple[List[TestCase], int]:
+        """获取测试用例列表
         
         Args:
             db: 数据库会话
-            project: 项目名称
-            module: 模块名称
-            level: 用例等级
-            task_id: 任务ID
+            project: 项目名称过滤
+            module: 模块名称过滤
+            task_id: 任务ID过滤
+            page: 页码(从1开始)
+            page_size: 每页数量
             
         Returns:
-            List[TestCase]: 用例列表
+            Tuple[List[TestCase], int]: 用例列表和总数
         """
         try:
-            # 构建基础查询
+            # 构建查询
             query = select(TestCase)
             
-            # 添加查询条件
-            conditions = []
-            
+            # 添加过滤条件
             if project:
-                # 记录查询条件
-                logger.info(f"查询项目: {project}")
-                conditions.append(TestCase.project == project)
-                
+                query = query.where(TestCase.project == project)
             if module:
-                logger.info(f"查询模块: {module}")
-                conditions.append(TestCase.module == module)
-                
-            if level:
-                logger.info(f"查询等级: {level}")
-                conditions.append(TestCase.level == level)
-                
+                query = query.where(TestCase.module == module)
             if task_id:
-                logger.info(f"查询任务: {task_id}")
-                conditions.append(TestCase.task_id == task_id)
-                
-            # 组合所有条件
-            if conditions:
-                query = query.where(*conditions)
-                
+                query = query.where(TestCase.task_id == task_id)
+            
+            # 添加排序(按创建时间倒序)
+            query = query.order_by(TestCase.created_at.desc())
+            
+            # 计算分页
+            skip = (page - 1) * page_size
+            
+            # 获取总数
+            total = await db.scalar(select(func.count()).select_from(query.subquery()))
+            
+            # 添加分页
+            query = query.offset(skip).limit(page_size)
+            
             # 执行查询
             result = await db.execute(query)
             cases = result.scalars().all()
             
-            # 记录查询结果
-            logger.info(f"查询到 {len(cases)} 条用例")
-            for case in cases:
-                logger.debug(f"用例内容: {case.content}")
-                
-            return cases
+            return cases, total
             
         except Exception as e:
-            logger.error(f"查询用例失败: {str(e)}")
-            return []
+            logger.error(f"获取用例列表失败: {str(e)}")
+            raise
+    
+    @classmethod
+    async def delete_case(
+        cls,
+        case_id: str,
+        db: AsyncSession
+    ) -> bool:
+        """删除测试用例
+        
+        Args:
+            case_id: 用例ID
+            db: 数据库会话
+            
+        Returns:
+            bool: 是否删除成功
+        """
+        try:
+            # 获取用例信息
+            result = await db.execute(
+                select(TestCase).where(TestCase.id == case_id)
+            )
+            case = result.scalar_one_or_none()
+            
+            if not case:
+                raise ValueError("用例不存在")
+            
+            # 删除用例
+            await db.delete(case)
+            await db.commit()
+            
+            logger.info(f"用例删除成功: {case_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"用例删除失败: {str(e)}")
+            raise
+
+    @classmethod
+    async def batch_delete_cases(
+        cls,
+        case_ids: List[str],
+        db: AsyncSession
+    ) -> Dict[str, bool]:
+        """批量删除测试用例
+        
+        Args:
+            case_ids: 用例ID列表
+            db: 数据库会话
+            
+        Returns:
+            Dict[str, bool]: 每个用例的删除结果
+        """
+        results = {}
+        for case_id in case_ids:
+            try:
+                success = await cls.delete_case(case_id, db)
+                results[case_id] = success
+            except Exception as e:
+                logger.error(f"删除用例失败 {case_id}: {str(e)}")
+                results[case_id] = False
+        return results
+
+    @classmethod
+    async def update_case(
+        cls,
+        case_id: str,
+        project: Optional[str] = None,
+        module: Optional[str] = None,
+        name: Optional[str] = None,
+        level: Optional[str] = None,
+        status: Optional[str] = None,
+        content: Optional[Dict] = None,
+        db: AsyncSession = None
+    ) -> Optional[TestCase]:
+        """更新测试用例信息
+        
+        Args:
+            case_id: 用例ID
+            project: 项目名称
+            module: 模块名称
+            name: 用例名称
+            level: 用例等级
+            status: 用例状态
+            content: 用例内容
+            db: 数据库会话
+            
+        Returns:
+            Optional[TestCase]: 更新后的用例信息
+        """
+        try:
+            # 获取用例信息
+            result = await db.execute(
+                select(TestCase).where(TestCase.id == case_id)
+            )
+            case = result.scalar_one_or_none()
+            
+            if not case:
+                raise ValueError("用例不存在")
+            
+            # 更新字段
+            if project is not None:
+                case.project = project
+            if module is not None:
+                case.module = module
+            if name is not None:
+                case.name = name
+            if level is not None:
+                case.level = level
+            if status is not None:
+                case.status = status
+            if content is not None:
+                case.content = json.dumps(content)
+            
+            # 保存更新
+            await db.commit()
+            await db.refresh(case)
+            
+            logger.info(f"用例信息更新成功: {case_id}")
+            return case
+            
+        except Exception as e:
+            logger.error(f"用例信息更新失败: {str(e)}")
+            raise
     

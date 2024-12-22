@@ -52,6 +52,19 @@ class ExportRequest(BaseModel):
     module_name: Optional[str] = None
     task_id: Optional[str] = None
 
+class CaseUpdate(BaseModel):
+    """用例更新请求模型"""
+    project: Optional[str] = None
+    module: Optional[str] = None
+    name: Optional[str] = None
+    level: Optional[str] = None
+    status: Optional[str] = None
+    content: Optional[Dict[str, Any]] = None
+
+class BatchDeleteCasesRequest(BaseModel):
+    """批量删除用例请求模型"""
+    case_ids: List[str]
+
 @router.post("/export/excel")
 async def export_cases_excel(
     request: ExportRequest,
@@ -170,39 +183,31 @@ async def generate_cases(
 async def list_tasks(
     type: Optional[str] = None,
     status: Optional[str] = None,
-    skip: Optional[str] = None,
-    limit: Optional[str] = None
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=10, ge=1, le=100, description="每页数量")
 ) -> ResponseModel[List[TaskInfo]]:
     """获取任务列表
     
     Args:
         type: 任务类型过滤
         status: 任务状态过滤
-        skip: 跳过的记录数，默认0
-        limit: 返回的最大记录数，默认10，最大100
+        page: 页码(从1开始)
+        page_size: 每页数量
         
     Returns:
         ResponseModel[List[TaskInfo]]: 任务列表
     """
     try:
-        # 处理分页参数
-        try:
-            skip_val = int(skip) if skip and skip.strip() else 0
-            limit_val = int(limit) if limit and limit.strip() else 10
-        except ValueError:
-            skip_val = 0
-            limit_val = 10
+        # 计算skip和limit
+        skip = (page - 1) * page_size
+        limit = page_size
             
-        # 验证参数范围
-        skip_val = max(0, skip_val)  # 确保不小于0
-        limit_val = max(1, min(100, limit_val))  # 确保在1-100之间
-        
         # 获取任务列表
         tasks = TaskManager.list_tasks(
             type=type, 
             status=status, 
-            skip=skip_val,
-            limit=limit_val
+            skip=skip,
+            limit=limit
         )
         
         # 转换为响应模型
@@ -310,7 +315,7 @@ async def get_case(
         ResponseModel[CaseInfo]: 用例详情
     """
     try:
-        # 获取用例
+        # ���取用例
         case = await CaseService.get_case_by_id(case_id, db)
         if not case:
             raise HTTPException(status_code=404, detail="用例不存在")
@@ -343,57 +348,128 @@ async def get_case(
 
 @router.get("/")
 async def list_cases(
-    project: Optional[str] = None,
-    module: Optional[str] = None,
-    level: Optional[str] = None,
-    task_id: Optional[str] = None,
+    project: Optional[str] = Query(default=None, description="项目名称过滤"),
+    module: Optional[str] = Query(default=None, description="模块名称过滤"),
+    task_id: Optional[str] = Query(default=None, description="任务ID过滤"),
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=10, ge=1, le=100, description="每页数量"),
     db: AsyncSession = Depends(get_db)
 ) -> ResponseModel[List[CaseInfo]]:
-    """获取用例列表"""
-    try:
-        # 记录请求参数
-        logger.info(f"接收查询请求: project={project}, module={module}, level={level}, task_id={task_id}")
+    """获取测试用例列表
+    
+    Args:
+        project: 项目名称过滤
+        module: 模块名称过滤
+        task_id: 任务ID过滤
+        page: 页码(从1开始)
+        page_size: 每页数量
+        db: 数据库会话
         
-        # 获取用例列表
-        cases = await CaseService.list_cases(
+    Returns:
+        ResponseModel[List[CaseInfo]]: 用例列表响应
+    """
+    try:
+        cases, total = await CaseService.list_cases(
             db,
             project=project,
             module=module,
-            level=level,
-            task_id=task_id
+            task_id=task_id,
+            page=page,
+            page_size=page_size
         )
         
-        # 转换为应用模型
+        # 转换为响应模型
         case_infos = []
         for case in cases:
             try:
                 content = json.loads(case.content)
-                # 记录每个用例的project字段
-                logger.debug(f"用例[{case.id}] project字段: {content.get('project', '')}")
-                
-                case_infos.append(
-                    CaseInfo(
-                        case_id=case.id,
-                        project=content.get('project', ''),
-                        module=case.module,
-                        name=case.name,
-                        level=case.level,
-                        status=case.status,
-                        content=content
-                    )
-                )
             except json.JSONDecodeError:
                 logger.error(f"解析用例内容失败: {case.content}")
-                continue
-        
-        # 记录查询结果
-        logger.info(f"查询到 {len(case_infos)} 条用例记录")
-        if not case_infos:
-            logger.warning(f"未找到匹配的用例: project={project}, module={module}, level={level}, task_id={task_id}")
-        
-        response = ResponseModel(data=case_infos)
-        return response
+                raise HTTPException(status_code=500, detail="用例内容格式错误")
+                
+            case_info = CaseInfo(
+                case_id=case.id,
+                project=case.project,
+                module=case.module,
+                name=content.get("name", ""),
+                level=content.get("level", ""),
+                status=case.status,
+                content=content
+            )
+            case_infos.append(case_info)
+            
+        return ResponseModel(
+            data={
+                "total": total,
+                "items": case_infos
+            }
+        )
         
     except Exception as e:
         logger.error(f"获取用例列表失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="获取用例列表失败") 
+        raise HTTPException(status_code=500, detail="获取用例列表失败")
+
+@router.delete("/{case_id}")
+async def delete_case(
+    case_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[bool]:
+    """删除测试用例"""
+    try:
+        success = await CaseService.delete_case(case_id, db)
+        return ResponseModel(
+            message="用例删除成功" if success else "用例删除失败",
+            data=success
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"用例删除失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="用例删除失败")
+
+@router.delete("")
+async def batch_delete_cases(
+    request: BatchDeleteCasesRequest,
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[Dict[str, bool]]:
+    """批量删除测试用例"""
+    try:
+        results = await CaseService.batch_delete_cases(request.case_ids, db)
+        return ResponseModel(
+            message="批量删除完成",
+            data=results
+        )
+    except Exception as e:
+        logger.error(f"批量删除用例失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="批量删��用例失败")
+
+@router.put("/{case_id}")
+async def update_case(
+    case_id: str,
+    case_update: CaseUpdate,
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[CaseInfo]:
+    """更新测试用例信息"""
+    try:
+        updated_case = await CaseService.update_case(
+            case_id=case_id,
+            project=case_update.project,
+            module=case_update.module,
+            name=case_update.name,
+            level=case_update.level,
+            status=case_update.status,
+            content=case_update.content,
+            db=db
+        )
+        if not updated_case:
+            raise HTTPException(status_code=404, detail="用例不存在")
+            
+        return ResponseModel(
+            message="用例信息更新成功",
+            data=CaseInfo.model_validate(updated_case)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"用例信息更新失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="用例信息更新失败") 

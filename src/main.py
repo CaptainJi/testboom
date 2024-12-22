@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from src.api.middlewares.logger import LoggerMiddleware
 from src.api.models.base import ResponseModel
-from src.api.routers import case, file
+from src.api.routers import case, file, dashboard
 from src.api.services.file import FileService
 from src.db import init_db
 import os
@@ -36,6 +36,7 @@ app.add_middleware(LoggerMiddleware)
 # 注册路由
 app.include_router(case.router)
 app.include_router(file.router)
+app.include_router(dashboard.router)
 
 # 自定义OpenAPI文档路由
 @app.get("/docs", include_in_schema=False)

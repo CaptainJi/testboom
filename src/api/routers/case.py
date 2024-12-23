@@ -65,6 +65,11 @@ class BatchDeleteCasesRequest(BaseModel):
     """批量删除用例请求模型"""
     case_ids: List[str]
 
+class CaseList(BaseModel):
+    """用例列表响应模型"""
+    total: int
+    items: List[CaseInfo]
+
 @router.post("/export/excel")
 async def export_cases_excel(
     request: ExportRequest,
@@ -92,19 +97,23 @@ async def export_cases_excel(
                     cases.append(case_data)
         elif request.task_id:
             # 根据任务ID导出用例
-            cases_from_db = await CaseService.list_cases(
+            cases_from_db, _ = await CaseService.list_cases(
                 db,
-                task_id=request.task_id
+                task_id=request.task_id,
+                page=1,
+                page_size=1000  # 设置较大的页面大小以获取所有用例
             )
             for case in cases_from_db:
                 case_data = json.loads(case.content)
                 cases.append(case_data)
         else:
             # 根据项目或模块导出用例
-            cases_from_db = await CaseService.list_cases(
+            cases_from_db, _ = await CaseService.list_cases(
                 db,
                 project=request.project_name,
-                module=request.module_name
+                module=request.module_name,
+                page=1,
+                page_size=1000  # 设置较大的页面大小以获取所有用例
             )
             for case in cases_from_db:
                 case_data = json.loads(case.content)
@@ -315,7 +324,7 @@ async def get_case(
         ResponseModel[CaseInfo]: 用例详情
     """
     try:
-        # ���取用例
+        # 取用例
         case = await CaseService.get_case_by_id(case_id, db)
         if not case:
             raise HTTPException(status_code=404, detail="用例不存在")
@@ -354,7 +363,7 @@ async def list_cases(
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=10, ge=1, le=100, description="每页数量"),
     db: AsyncSession = Depends(get_db)
-) -> ResponseModel[List[CaseInfo]]:
+) -> ResponseModel[CaseList]:
     """获取测试用例列表
     
     Args:
@@ -366,7 +375,7 @@ async def list_cases(
         db: 数据库会话
         
     Returns:
-        ResponseModel[List[CaseInfo]]: 用例列表响应
+        ResponseModel[CaseList]: 用例列表响应
     """
     try:
         cases, total = await CaseService.list_cases(
@@ -399,10 +408,10 @@ async def list_cases(
             case_infos.append(case_info)
             
         return ResponseModel(
-            data={
-                "total": total,
-                "items": case_infos
-            }
+            data=CaseList(
+                total=total,
+                items=case_infos
+            )
         )
         
     except Exception as e:
@@ -441,7 +450,7 @@ async def batch_delete_cases(
         )
     except Exception as e:
         logger.error(f"批量删除用例失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="批量删��用例失败")
+        raise HTTPException(status_code=500, detail="批量删除用例失败")
 
 @router.put("/{case_id}")
 async def update_case(

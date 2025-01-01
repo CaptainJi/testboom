@@ -96,6 +96,10 @@ class StorageConfig(BaseSettings):
         case_sensitive=True
     )
 
+class PlantUMLSettings(BaseSettings):
+    """PlantUML 配置"""
+    PLANTUML_SERVER_URL: str = "http://www.plantuml.com/plantuml"
+
 class Settings(BaseSettings):
     """应用配置"""
     # 基础配置
@@ -111,6 +115,9 @@ class Settings(BaseSettings):
     log: LogConfig = Field(default_factory=LogConfig)
     db: DatabaseConfig = Field(default_factory=DatabaseConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    
+    # PlantUML 配置
+    plantuml: PlantUMLSettings = PlantUMLSettings()
     
     model_config = SettingsConfigDict(
         env_file=".env",

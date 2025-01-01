@@ -606,3 +606,125 @@ class CaseService:
             logger.error(f"用例信息更新失败: {str(e)}")
             raise
     
+    @classmethod
+    async def _process_generate_cases_task(cls, task_id: str, file_id: str, project_name: str, module_name: Optional[str] = None):
+        """处理用例生成任务"""
+        try:
+            # 更新任务状态为处理中
+            TaskManager.update_task(task_id, status="processing", progress=10)
+            
+            # 获取文件内容
+            file_service = FileService()
+            file_content = await file_service.get_file_content(file_id)
+            if not file_content:
+                TaskManager.update_task(
+                    task_id,
+                    status="failed",
+                    error="获取文件内容失败"
+                )
+                return
+            
+            TaskManager.update_task(task_id, progress=30)
+            
+            # 分析需求文档
+            chat_manager = ChatManager()
+            analysis_result = await chat_manager.analyze_requirement(
+                content=file_content.get("content", ""),
+                image_paths=file_content.get("image_paths", [])
+            )
+            
+            if not analysis_result:
+                TaskManager.update_task(
+                    task_id,
+                    status="failed",
+                    error="需求分析失败"
+                )
+                return
+            
+            TaskManager.update_task(task_id, progress=60)
+            
+            # 生成测试用例
+            testcases = await chat_manager.generate_testcases(
+                summary=analysis_result
+            )
+            
+            if not testcases:
+                TaskManager.update_task(
+                    task_id,
+                    status="failed",
+                    error="用例生成失败"
+                )
+                return
+            
+            TaskManager.update_task(task_id, progress=80)
+            
+            # 生成PlantUML思维导图
+            plantuml_code = await chat_manager.export_testcases_to_plantuml(
+                testcases,
+                "mindmap"
+            )
+            
+            if not plantuml_code:
+                TaskManager.update_task(
+                    task_id,
+                    status="failed",
+                    error="生成思维导图失败"
+                )
+                return
+            
+            # 保存测试用例
+            async with AsyncSessionLocal() as db:
+                saved_cases = []
+                for case in testcases:
+                    case_model = await cls.create_case(
+                        project=project_name,
+                        module=module_name or case.get("module", "默认模块"),
+                        name=case.get("name", ""),
+                        level=case.get("level", ""),
+                        content=case,
+                        task_id=task_id,
+                        db=db
+                    )
+                    if case_model:
+                        saved_cases.append(case_model)
+            
+            if not saved_cases:
+                TaskManager.update_task(
+                    task_id,
+                    status="failed",
+                    error="保存用例失败"
+                )
+                return
+            
+            # 只更新一次任务状态，包含所有信息
+            TaskManager.update_task(
+                task_id,
+                status="completed",
+                progress=100,
+                result={
+                    "progress": "测试用例生成完成",
+                    "cases_count": len(saved_cases),
+                    "cases": [
+                        {
+                            "id": case.id,
+                            "project": case.project,
+                            "module": case.module,
+                            "name": case.name,
+                            "level": case.level,
+                            "status": case.status,
+                            "content": json.loads(case.content)
+                        }
+                        for case in saved_cases
+                    ],
+                    "plantuml_code": plantuml_code
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"处理用例生成任务失败: {str(e)}")
+            TaskManager.update_task(
+                task_id,
+                status="failed",
+                error=str(e)
+            )
+    

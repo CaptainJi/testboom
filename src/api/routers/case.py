@@ -6,12 +6,15 @@ from src.api.models.base import ResponseModel
 from src.api.services.case import CaseService
 from src.api.services.task import TaskManager
 from src.db.session import get_db
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pathlib import Path
 from loguru import logger
 import json
 import time
 import os
+from src.ai_core.chat_manager import ChatManager
+from src.utils.plantuml import render_plantuml
+import asyncio
 
 router = APIRouter(prefix="/api/v1/cases", tags=["cases"])
 
@@ -481,4 +484,261 @@ async def update_case(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"用例信息更新失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="用例信息更新失败") 
+        raise HTTPException(status_code=500, detail="用例信息更新失败")
+
+@router.get("/{case_id}/plantuml")
+async def export_case_plantuml(
+    case_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[str]:
+    """导出测试用例为PlantUML思维导图代码"""
+    try:
+        # 获取测试用例
+        case = await CaseService.get_case_by_id(case_id, db)
+        if not case:
+            raise HTTPException(status_code=404, detail="测试用例不存在")
+        
+        # 解析用例内容
+        try:
+            content = json.loads(case.content)
+        except json.JSONDecodeError:
+            logger.error(f"解析用例内容失败: {case.content}")
+            raise HTTPException(status_code=500, detail="用例内容格式错误")
+        
+        # 生成PlantUML代码
+        chat_manager = ChatManager()
+        plantuml_code = await chat_manager.export_testcases_to_plantuml(
+            [content],  # 传入单个用例的内容
+            "mindmap"   # 固定生成思维导图
+        )
+        if not plantuml_code:
+            raise HTTPException(status_code=500, detail="生成PlantUML失败")
+        
+        return ResponseModel(
+            message="生成PlantUML思维导图成功",
+            data=plantuml_code
+        )
+        
+    except Exception as e:
+        logger.error(f"导出PlantUML失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{case_id}/plantuml/async")
+async def generate_plantuml_async(
+    case_id: str,
+    diagram_type: str = Query("mindmap", enum=["mindmap", "sequence"]),
+    format: str = Query("svg", enum=["svg", "png"]),
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[str]:
+    """异步生成PlantUML图表"""
+    try:
+        # 获取测试用例
+        case = await CaseService.get_case_by_id(case_id, db)
+        if not case:
+            raise HTTPException(status_code=404, detail="测试用例不存在")
+        
+        # 解析用例内容
+        try:
+            content = json.loads(case.content)
+        except json.JSONDecodeError:
+            logger.error(f"解析用例内容失败: {case.content}")
+            raise HTTPException(status_code=500, detail="用例内容格式错误")
+        
+        # 创建异步任务
+        task_id = TaskManager.create_task(
+            task_type="plantuml_generation",  # 修改任务类型
+            params={
+                "case_id": case_id,
+                "case_content": content,  # 直接传入用例内容
+                "diagram_type": diagram_type,
+                "format": format
+            }
+        )
+        
+        # 启动异步处理
+        asyncio.create_task(process_plantuml_task(task_id, content, diagram_type, format))
+        
+        return ResponseModel(
+            message="PlantUML生成任务已创建",
+            data=task_id
+        )
+        
+    except Exception as e:
+        logger.error(f"创建PlantUML生成任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def process_plantuml_task(
+    task_id: str,
+    case_content: Dict[str, Any],
+    diagram_type: str,
+    format: str
+):
+    """处理PlantUML生成任务"""
+    try:
+        # 更新任务状态为处理中
+        TaskManager.update_task(task_id, status="processing", progress=10)
+        
+        # 生成PlantUML代码
+        chat_manager = ChatManager()
+        plantuml_code = await chat_manager.export_testcases_to_plantuml(
+            [case_content],
+            diagram_type
+        )
+        if not plantuml_code:
+            TaskManager.update_task(
+                task_id,
+                status="failed",
+                error="生成PlantUML代码失败"
+            )
+            return
+            
+        TaskManager.update_task(task_id, progress=50)
+        
+        # 渲染图片
+        image_data = await render_plantuml(plantuml_code, format)
+        if not image_data:
+            TaskManager.update_task(
+                task_id,
+                status="failed",
+                error="渲染图片失败"
+            )
+            return
+            
+        # 保存图片到临时文件
+        output_dir = Path("output/plantuml")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        output_path = output_dir / f"{task_id}.{format}"
+        with open(output_path, "wb") as f:
+            f.write(image_data)
+            
+        # 更新任务状态为完成
+        TaskManager.update_task(
+            task_id,
+            status="completed",
+            progress=100,
+            result={
+                "file_path": str(output_path),
+                "format": format,
+                "diagram_type": diagram_type
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"处理PlantUML任务失败: {str(e)}")
+        TaskManager.update_task(
+            task_id,
+            status="failed",
+            error=str(e)
+        )
+
+@router.get("/plantuml/tasks/{task_id}")  # 修改路由路径
+async def get_plantuml_task_status(task_id: str) -> ResponseModel[Dict[str, Any]]:
+    """获取PlantUML生成任务状态"""
+    try:
+        # 获取任务信息
+        task = TaskManager.get_task_info(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+            
+        if task["type"] != "plantuml_generation":  # 修改任务类型判断
+            raise HTTPException(status_code=400, detail="不是PlantUML生成任务")
+            
+        # 如果任务完成且有结果，添加文件下载链接
+        if task["status"] == "completed" and task.get("result"):
+            file_path = task["result"].get("file_path")
+            if file_path and os.path.exists(file_path):
+                task["result"]["download_url"] = f"/api/v1/cases/plantuml/download/{task_id}"
+            
+        return ResponseModel(
+            data={
+                "status": task["status"],
+                "progress": task["progress"],
+                "result": task.get("result"),
+                "error": task.get("error")
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取PlantUML生成任务状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/plantuml/download/{task_id}")
+async def download_plantuml(task_id: str) -> FileResponse:
+    """下载生成的PlantUML图片"""
+    try:
+        # 获取任务信息
+        task = TaskManager.get_task_info(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+            
+        if task["type"] != "plantuml_generation":
+            raise HTTPException(status_code=400, detail="不是PlantUML生成任务")
+            
+        if task["status"] != "completed":
+            raise HTTPException(status_code=400, detail="任务未完成")
+            
+        result = task.get("result", {})
+        file_path = result.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+            
+        return FileResponse(
+            path=file_path,
+            filename=f"plantuml_{task_id}.{result.get('format', 'svg')}",
+            media_type=f"image/{result.get('format', 'svg')}"
+        )
+        
+    except Exception as e:
+        logger.error(f"下载PlantUML图片失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/plantuml/status/{task_id}")
+async def get_task_plantuml(
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[str]:
+    """获取任务生成的PlantUML思维导图结果"""
+    try:
+        # 获取任务信息
+        task = TaskManager.get_task_info(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        # 检查任务状态
+        if task["status"] != "completed":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"任务尚未完成，当前状态: {task['status']}"
+            )
+        
+        # 获取该任务相关的所有测试用例
+        cases, total = await CaseService.list_cases(
+            task_id=task_id,
+            db=db
+        )
+        
+        if not cases:
+            raise HTTPException(status_code=404, detail="未找到相关测试用例")
+        
+        # 提取用例内容并生成 PlantUML 代码
+        chat_manager = ChatManager()
+        testcases = [json.loads(case.content) for case in cases]
+        plantuml_code = await chat_manager.export_testcases_to_plantuml(
+            testcases,
+            "mindmap"
+        )
+        
+        if not plantuml_code:
+            raise HTTPException(status_code=500, detail="生成思维导图失败")
+        
+        return ResponseModel(
+            message="获取PlantUML思维导图成功",
+            data=plantuml_code
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务PlantUML失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) 

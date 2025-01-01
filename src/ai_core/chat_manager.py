@@ -4,6 +4,7 @@ from .prompt_template import PromptTemplate
 from src.logger.logger import logger
 from src.utils.decorators import handle_exceptions
 from src.utils.common import safe_json_loads
+from src.utils.plantuml_generator import PlantUMLGenerator
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.memory import BaseMemory
@@ -566,4 +567,49 @@ class ChatManager:
             
         except Exception as e:
             logger.error(f"生成测试用例时发生错误: {str(e)}", exc_info=True)
+            return None
+
+    @handle_exceptions(default_return=None)
+    async def export_testcases_to_plantuml(
+        self,
+        testcases: List[Dict[str, Any]],
+        diagram_type: str = "mindmap"
+    ) -> Optional[str]:
+        """导出测试用例为PlantUML格式
+        
+        Args:
+            testcases: 测试用例列表
+            diagram_type: 图表类型 ("mindmap" 或 "sequence")
+            
+        Returns:
+            Optional[str]: PlantUML代码
+        """
+        try:
+            logger.info(f"开始导出测试用例为PlantUML格式，图表类型: {diagram_type}")
+            
+            generator = PlantUMLGenerator()
+            
+            if diagram_type == "mindmap":
+                logger.info("生成思维导图")
+                return generator.generate_mindmap(testcases)
+            elif diagram_type == "sequence":
+                logger.info("生成时序图")
+                # 对于时序图，每个用例生成单独的图
+                sequence_diagrams = []
+                for case in testcases:
+                    diagram = generator.generate_sequence(case)
+                    if diagram:
+                        sequence_diagrams.append(diagram)
+                
+                if not sequence_diagrams:
+                    logger.error("没有生成任何时序图")
+                    return None
+                    
+                return "\n\n".join(sequence_diagrams)
+            else:
+                logger.error(f"不支持的图表类型: {diagram_type}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"导出PlantUML失败: {str(e)}")
             return None

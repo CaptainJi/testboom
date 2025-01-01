@@ -712,9 +712,11 @@ async def get_task_plantuml(
                 detail=f"任务尚未完成，当前状态: {task['status']}"
             )
         
-        # 获取该任务相关的所有测试用例
+        # 获取该任务相关的所有测试用例（不分页）
         cases, total = await CaseService.list_cases(
             task_id=task_id,
+            page=1,
+            page_size=1000,  # 设置一个足够大的数字以获取所有用例
             db=db
         )
         

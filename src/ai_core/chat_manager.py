@@ -475,6 +475,7 @@ class ChatManager:
         self,
         summary: Dict[str, Any],
         details: Optional[Dict[str, Any]] = None,
+        project_name: Optional[str] = None,
         progress_callback: Optional[Callable[[str, None], None]] = None
     ) -> Optional[List[Dict[str, Any]]]:
         """生成测试用例
@@ -482,6 +483,7 @@ class ChatManager:
         Args:
             summary: 需求分析结果
             details: 额外的细节信息
+            project_name: 项目名称
             progress_callback: 进度回调函数，参数为(当前阶段, None)
             
         Returns:
@@ -556,17 +558,15 @@ class ChatManager:
                     testcase['expected'] = [testcase['expected']] if isinstance(testcase['expected'], str) else testcase['expected']
                     # 确保ID不重复
                     testcase['id'] = f"TC_{idx:03d}"
+                    # 设置项目名称
+                    if project_name:
+                        testcase['project'] = project_name
                     valid_testcases.append(testcase)
             
-            if not valid_testcases:
-                logger.error("没有生成有效的测试用例")
-                return None
-            
-            logger.info(f"成功生成 {len(valid_testcases)} 个测试用例")
             return valid_testcases
             
         except Exception as e:
-            logger.error(f"生成测试用例时发生错误: {str(e)}", exc_info=True)
+            logger.error(f"生成测试用例失败: {str(e)}")
             return None
 
     @handle_exceptions(default_return=None)

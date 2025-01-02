@@ -51,11 +51,12 @@ class TaskManager:
             cls._loop_ready.wait()
     
     @classmethod
-    def create_task(cls, task_type: str) -> str:
+    def create_task(cls, task_type: str, params: Optional[Dict[str, Any]] = None) -> str:
         """创建任务
         
         Args:
             task_type: 任务类型
+            params: 任务参数
             
         Returns:
             str: 任务ID
@@ -66,7 +67,10 @@ class TaskManager:
             'type': task_type,
             'status': 'pending',
             'progress': 0,
-            'result': None,
+            'result': {
+                'progress': '任务已创建，等待处理...',
+                **(params or {})  # 合并任务参数
+            },
             'error': None,
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow()
@@ -94,15 +98,7 @@ class TaskManager:
         result: Optional[Any] = None,
         error: Optional[str] = None
     ) -> None:
-        """更新任务状态
-        
-        Args:
-            task_id: 任务ID
-            status: 任务状态
-            progress: 任务进度
-            result: 任务结果
-            error: 错误信息
-        """
+        """更新任务状态"""
         task = cls._tasks.get(task_id)
         if not task:
             logger.warning(f"尝试更新不存在的任务: {task_id}")
@@ -117,6 +113,7 @@ class TaskManager:
         if error is not None:
             updates['error'] = error
         if result is not None:
+            logger.info(f"更新任务结果，任务ID: {task_id}, 结果: {result}")
             # 处理结果数据
             if isinstance(result, list):
                 processed_result = []
@@ -133,6 +130,18 @@ class TaskManager:
                     else:
                         processed_result.append(item)
                 updates['result'] = processed_result
+            elif isinstance(result, dict):
+                # 如果是字典，保留原有的项目和模块信息
+                current_result = task.get('result', {})
+                if isinstance(current_result, dict):
+                    project_name = current_result.get('project_name', '')
+                    module_name = current_result.get('module_name', '')
+                    if not result.get('project_name'):
+                        result['project_name'] = project_name
+                    if not result.get('module_name'):
+                        result['module_name'] = module_name
+                updates['result'] = result
+                logger.info(f"更新后的结果: {result}")
             else:
                 updates['result'] = result
         
@@ -204,13 +213,39 @@ class TaskManager:
         
         async def _run_task():
             try:
-                # 更新任务状态为运行中
-                cls.update_task(task_id, status='running', progress=0)
+                # 获取当前任务信息
+                task = cls._tasks.get(task_id)
+                if not task:
+                    logger.error(f"任务不存在: {task_id}")
+                    return
+                
+                # 保留原有的 result 内容
+                current_result = task.get('result', {})
+                if isinstance(current_result, dict):
+                    current_result['progress'] = '任务开始执行...'
+                else:
+                    current_result = {'progress': '任务开始执行...'}
+                
+                # 更新任务状态为运行中，保留原有的 result 内容
+                cls.update_task(
+                    task_id,
+                    status='running',
+                    progress=0,
+                    result=current_result
+                )
                 
                 # 执行任务
                 result = await coro(*args, **kwargs)
                 
                 # 更新任务状态为完成
+                if isinstance(result, dict):
+                    # 如果结果是字典，合并原有的项目和模块信息
+                    result = {
+                        **result,
+                        'project_name': current_result.get('project_name', ''),
+                        'module_name': current_result.get('module_name', '')
+                    }
+                
                 cls.update_task(
                     task_id,
                     status='completed',

@@ -46,7 +46,13 @@ class CaseService:
         """
         try:
             # 创建任务
-            task_id = TaskManager.create_task("generate_cases")
+            task_id = TaskManager.create_task(
+                task_type="generate_cases",
+                params={
+                    'project_name': project_name,
+                    'module_name': module_name or ''
+                }
+            )
             
             # 启动后台任务，不等待
             TaskManager.run_background_task(
@@ -113,7 +119,9 @@ class CaseService:
                 TaskManager.update_task(
                     task_id,
                     result={
-                        'progress': '正在保存测试用例...'
+                        'progress': '正在保存测试用例...',
+                        'project_name': project_name,
+                        'module_name': module_name or ''
                     }
                 )
                 
@@ -134,7 +142,9 @@ class CaseService:
                     status='completed',
                     result={
                         'progress': '测试用例生成完成',
-                        'cases_count': len(cases)
+                        'cases_count': len(cases),
+                        'project_name': project_name,
+                        'module_name': module_name or ''
                     }
                 )
                 
@@ -186,6 +196,7 @@ class CaseService:
         try:
             # 创建ChatManager实例
             chat_manager = ChatManager()
+            logger.info(f"开始处理ZIP文件，项目名称: {project_name}, 模块名称: {module_name}")
             
             # 分割路径列表
             paths = file_paths.split(';')
@@ -213,28 +224,38 @@ class CaseService:
             try:
                 # 更新任务状态 - 开始分析需求
                 if task_id:
+                    logger.info(f"更新任务状态，任务ID: {task_id}, 项目名称: {project_name}")
                     TaskManager.update_task(
                         task_id,
                         result={
-                            'progress': f'正在分析需求文档 (共{len(image_files)}张图片)...'
+                            'progress': f'正在分析需求文档 (共{len(image_files)}张图片)...',
+                            'project_name': project_name,
+                            'module_name': module_name or ''
                         }
                     )
                 
                 # 定义状态更新回调
                 def update_progress(current: int, total: int, stage: str = 'analyze'):
                     if task_id:
+                        logger.info(f"更新进度，阶段: {stage}, 当前: {current}, 总数: {total}, 项目名称: {project_name}")
                         if stage == 'analyze':
                             TaskManager.update_task(
                                 task_id,
                                 result={
-                                    'progress': f'正在分析第 {current}/{total} 张图片...'
+                                    'progress': f'正在分析第 {current}/{total} 张图片...',
+                                    'current': current,
+                                    'total': total,
+                                    'project_name': project_name,
+                                    'module_name': module_name or ''
                                 }
                             )
                         elif stage == 'generate':
                             TaskManager.update_task(
                                 task_id,
                                 result={
-                                    'progress': f'正在生成测试用例...'
+                                    'progress': f'正在生成测试用例...',
+                                    'project_name': project_name,
+                                    'module_name': module_name or ''
                                 }
                             )
                 
@@ -253,7 +274,9 @@ class CaseService:
                     TaskManager.update_task(
                         task_id,
                         result={
-                            'progress': '正在生成功能架构相关测试用例...'
+                            'progress': '正在生成功能架构相关测试用例...',
+                            'project_name': project_name,
+                            'module_name': module_name or ''
                         }
                     )
                     
@@ -268,6 +291,7 @@ class CaseService:
                             }
                         ]
                     },
+                    project_name=project_name,
                     progress_callback=lambda stage, _: update_progress(1, None, 'generate')
                 )
                 
@@ -280,7 +304,9 @@ class CaseService:
                         task_id,
                         result={
                             'progress': '测试用例生成完成，准备保存...',
-                            'cases_count': len(testcases)
+                            'cases_count': len(testcases),
+                            'project_name': project_name,
+                            'module_name': module_name or ''
                         }
                     )
                 
@@ -371,7 +397,8 @@ class CaseService:
                         "features": {}
                     }
                 ]
-            }
+            },
+            project_name=project_name
         )
         
         if not testcases:
@@ -611,7 +638,16 @@ class CaseService:
         """处理用例生成任务"""
         try:
             # 更新任务状态为处理中
-            TaskManager.update_task(task_id, status="processing", progress=10)
+            TaskManager.update_task(
+                task_id,
+                status="processing",
+                progress=10,
+                result={
+                    'progress': '开始处理用例生成任务...',
+                    'project_name': project_name,
+                    'module_name': module_name or ''
+                }
+            )
             
             # 获取文件内容
             file_service = FileService()
@@ -624,7 +660,15 @@ class CaseService:
                 )
                 return
             
-            TaskManager.update_task(task_id, progress=30)
+            TaskManager.update_task(
+                task_id,
+                progress=30,
+                result={
+                    'progress': '正在分析需求文档...',
+                    'project_name': project_name,
+                    'module_name': module_name or ''
+                }
+            )
             
             # 分析需求文档
             chat_manager = ChatManager()
@@ -641,11 +685,20 @@ class CaseService:
                 )
                 return
             
-            TaskManager.update_task(task_id, progress=60)
+            TaskManager.update_task(
+                task_id,
+                progress=60,
+                result={
+                    'progress': '正在生成测试用例...',
+                    'project_name': project_name,
+                    'module_name': module_name or ''
+                }
+            )
             
             # 生成测试用例
             testcases = await chat_manager.generate_testcases(
-                summary=analysis_result
+                summary=analysis_result,
+                project_name=project_name
             )
             
             if not testcases:
@@ -656,7 +709,15 @@ class CaseService:
                 )
                 return
             
-            TaskManager.update_task(task_id, progress=80)
+            TaskManager.update_task(
+                task_id,
+                progress=80,
+                result={
+                    'progress': '正在生成思维导图...',
+                    'project_name': project_name,
+                    'module_name': module_name or ''
+                }
+            )
             
             # 生成PlantUML思维导图
             plantuml_code = await chat_manager.export_testcases_to_plantuml(
@@ -704,6 +765,8 @@ class CaseService:
                 result={
                     "progress": "测试用例生成完成",
                     "cases_count": len(saved_cases),
+                    "project_name": project_name,
+                    "module_name": module_name or '',
                     "cases": [
                         {
                             "id": case.id,

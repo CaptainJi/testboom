@@ -196,7 +196,8 @@ async def list_tasks(
     type: Optional[str] = None,
     status: Optional[str] = None,
     page: int = Query(default=1, ge=1, description="页码"),
-    page_size: int = Query(default=10, ge=1, le=100, description="每页数量")
+    page_size: int = Query(default=10, ge=1, le=100, description="每页数量"),
+    db: AsyncSession = Depends(get_db)
 ) -> ResponseModel[List[TaskInfo]]:
     """获取任务列表
     
@@ -205,6 +206,7 @@ async def list_tasks(
         status: 任务状态过滤
         page: 页码(从1开始)
         page_size: 每页数量
+        db: 数据库会话
         
     Returns:
         ResponseModel[List[TaskInfo]]: 任务列表
@@ -225,11 +227,29 @@ async def list_tasks(
         # 转换为响应模型
         task_infos = []
         for task in tasks:
+            # 获取任务相关的测试用例
+            cases, _ = await CaseService.list_cases(
+                db=db,
+                task_id=task['id'],
+                page=1,
+                page_size=1  # 只需要一条用例即可获取项目和模块信息
+            )
+            
+            # 获取项目和模块信息
+            project_name = ""
+            module_name = ""
+            if cases:
+                project_name = cases[0].project
+                module_name = cases[0].module
+            
             # 转换任务结果
             result = None
             if task.get('result'):
                 if isinstance(task['result'], dict) and task['result'].get('progress'):
                     result = task['result']
+                    # 添加项目和模块信息
+                    result['project_name'] = project_name
+                    result['module_name'] = module_name
                 else:
                     result = task['result']
             

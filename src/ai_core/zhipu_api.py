@@ -206,6 +206,7 @@ class ZhipuAI:
                     if task['type'] == 'generate_cases' and task['status'] == 'running':
                         progress_msg = f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片"
                         logger.debug(f"更新任务进度 - TaskID: {task_id}, Progress: {progress_msg}")
+                        
                         TaskManager.update_task(
                             task_id,
                             result={

@@ -45,14 +45,20 @@ class CaseService:
             str: 任务ID
         """
         try:
+            logger.info(f"开始生成用例 - FileID: {file_id}, Project: {project_name}, Module: {module_name}")
+            
             # 创建任务
+            task_params = {
+                'project_name': project_name,
+                'module_name': module_name or ''
+            }
+            logger.info(f"创建任务参数 - Params: {task_params}")
+            
             task_id = TaskManager.create_task(
                 task_type="generate_cases",
-                params={
-                    'project_name': project_name,
-                    'module_name': module_name or ''
-                }
+                params=task_params
             )
+            logger.info(f"任务创建完成 - TaskID: {task_id}")
             
             # 启动后台任务，不等待
             TaskManager.run_background_task(
@@ -63,6 +69,7 @@ class CaseService:
                 module_name,
                 task_id
             )
+            logger.info(f"后台任务已启动 - TaskID: {task_id}")
             
             return task_id
             

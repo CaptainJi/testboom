@@ -18,6 +18,8 @@ class TaskManager:
     
     # 存储任务信息
     _tasks: Dict[str, Dict[str, Any]] = {}
+    # 存储项目信息
+    _project_info: Dict[str, Dict[str, str]] = {}
     # 后台任务事件循环
     _background_loop = None
     # 后台线程
@@ -52,29 +54,43 @@ class TaskManager:
     
     @classmethod
     def create_task(cls, task_type: str, params: Optional[Dict[str, Any]] = None) -> str:
-        """创建任务
-        
-        Args:
-            task_type: 任务类型
-            params: 任务参数
-            
-        Returns:
-            str: 任务ID
-        """
+        """创建任务"""
         task_id = str(uuid.uuid4())
+        logger.info(f"创建任务 - TaskID: {task_id}, Type: {task_type}, Params: {params}")
+        
+        # 保存项目信息
+        project_name = params.get('project_name', '') if params else ''
+        module_name = params.get('module_name', '') if params else ''
+        cls._project_info[task_id] = {
+            'project_name': project_name,
+            'module_name': module_name
+        }
+        logger.info(f"保存项目信息 - TaskID: {task_id}, Project: {project_name}, Module: {module_name}")
+        
+        # 初始化结果，先处理其他参数
+        result = {}
+        if params:
+            result.update({k: v for k, v in params.items() if k not in ['project_name', 'module_name']})
+        
+        # 设置基本信息，确保不会被覆盖
+        result.update({
+            'progress': '任务已创建，等待处理...',
+            'project_name': project_name,
+            'module_name': module_name
+        })
+        logger.info(f"初始化任务结果 - TaskID: {task_id}, Result: {result}")
+        
         cls._tasks[task_id] = {
             'id': task_id,
             'type': task_type,
             'status': 'pending',
             'progress': 0,
-            'result': {
-                'progress': '任务已创建，等待处理...',
-                **(params or {})  # 合并任务参数
-            },
+            'result': result,
             'error': None,
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow()
         }
+        logger.info(f"任务创建完成 - TaskID: {task_id}, Task: {cls._tasks[task_id]}")
         return task_id
     
     @classmethod
@@ -95,61 +111,65 @@ class TaskManager:
         task_id: str,
         status: Optional[str] = None,
         progress: Optional[int] = None,
-        result: Optional[Any] = None,
+        result: Optional[Dict] = None,
         error: Optional[str] = None
-    ) -> None:
+    ) -> Optional[Dict]:
         """更新任务状态"""
-        task = cls._tasks.get(task_id)
-        if not task:
-            logger.warning(f"尝试更新不存在的任务: {task_id}")
-            return
+        try:
+            logger.info(f"开始更新任务 - TaskID: {task_id}, Status: {status}, Progress: {progress}, Result: {result}, Error: {error}")
             
-        # 原子更新任务状态
-        updates = {}
-        if status:
-            updates['status'] = status
-        if progress is not None:
-            updates['progress'] = progress
-        if error is not None:
-            updates['error'] = error
-        if result is not None:
-            logger.info(f"更新任务结果，任务ID: {task_id}, 结果: {result}")
-            # 处理结果数据
-            if isinstance(result, list):
-                processed_result = []
-                for item in result:
-                    if isinstance(item, dict):
-                        # 确保ID字段为字符串
-                        item_copy = item.copy()
-                        if 'id' in item_copy:
-                            item_copy['id'] = str(item_copy['id'])
-                        if 'content' in item_copy and isinstance(item_copy['content'], dict):
-                            if 'id' in item_copy['content']:
-                                item_copy['content']['id'] = str(item_copy['content']['id'])
-                        processed_result.append(item_copy)
-                    else:
-                        processed_result.append(item)
-                updates['result'] = processed_result
-            elif isinstance(result, dict):
-                # 如果是字典，保留原有的项目和模块信息
-                current_result = task.get('result', {})
-                if isinstance(current_result, dict):
-                    project_name = current_result.get('project_name', '')
-                    module_name = current_result.get('module_name', '')
-                    if not result.get('project_name'):
-                        result['project_name'] = project_name
-                    if not result.get('module_name'):
-                        result['module_name'] = module_name
-                updates['result'] = result
-                logger.info(f"更新后的结果: {result}")
-            else:
-                updates['result'] = result
-        
-        # 更新时间戳
-        updates['updated_at'] = datetime.utcnow()
-        
-        # 应用更新
-        task.update(updates)
+            if task_id not in cls._tasks:
+                logger.error(f"任务不存在 - TaskID: {task_id}")
+                return None
+            
+            task = cls._tasks[task_id]
+            logger.info(f"当前任务状态 - Task: {task}")
+            
+            if status:
+                task['status'] = status
+            if progress is not None:
+                task['progress'] = progress
+            if error is not None:
+                task['error'] = error
+            
+            # 更新结果
+            if result:
+                logger.info(f"更新任务结果，任务ID: {task_id}, 结果: {result}")
+                
+                # 获取保存的项目信息
+                project_info = cls._project_info.get(task_id, {})
+                project_name = project_info.get('project_name', '')
+                module_name = project_info.get('module_name', '')
+                logger.info(f"获取保存的项目信息 - TaskID: {task_id}, Project: {project_name}, Module: {module_name}")
+                
+                # 初始化新结果，使用保存的项目信息
+                new_result = {
+                    'project_name': project_name,
+                    'module_name': module_name
+                }
+                logger.info(f"初始化新结果 - TaskID: {task_id}, New Result: {new_result}")
+                
+                # 合并其他字段
+                for key, value in result.items():
+                    if key not in ['project_name', 'module_name']:
+                        new_result[key] = value
+                logger.info(f"合并新字段后 - TaskID: {task_id}, Updated Result: {new_result}")
+                
+                logger.info(f"最终结果 - TaskID: {task_id}, Final Result: {new_result}")
+                task['result'] = new_result
+            
+            # 更新时间戳
+            task['updated_at'] = datetime.utcnow()
+            
+            # 应用更新
+            cls._tasks[task_id] = task
+            logger.info(f"任务更新完成 - TaskID: {task_id}, Updated Task: {task}")
+            
+            return task
+            
+        except Exception as e:
+            logger.error(f"更新任务失败: {str(e)}")
+            return None
     
     @classmethod
     def list_tasks(
@@ -219,19 +239,22 @@ class TaskManager:
                     logger.error(f"任务不存在: {task_id}")
                     return
                 
-                # 保留原有的 result 内容
-                current_result = task.get('result', {})
-                if isinstance(current_result, dict):
-                    current_result['progress'] = '任务开始执行...'
-                else:
-                    current_result = {'progress': '任务开始执行...'}
+                # 从 _project_info 获取项目信息
+                project_info = cls._project_info.get(task_id, {})
+                project_name = project_info.get('project_name', '')
+                module_name = project_info.get('module_name', '')
+                logger.info(f"获取保存的项目信息 - TaskID: {task_id}, Project: {project_name}, Module: {module_name}")
                 
-                # 更新任务状态为运行中，保留原有的 result 内容
+                # 更新任务状态为运行中
                 cls.update_task(
                     task_id,
                     status='running',
                     progress=0,
-                    result=current_result
+                    result={
+                        'project_name': project_name,
+                        'module_name': module_name,
+                        'progress': '任务开始执行...'
+                    }
                 )
                 
                 # 执行任务
@@ -239,18 +262,23 @@ class TaskManager:
                 
                 # 更新任务状态为完成
                 if isinstance(result, dict):
-                    # 如果结果是字典，合并原有的项目和模块信息
-                    result = {
-                        **result,
-                        'project_name': current_result.get('project_name', ''),
-                        'module_name': current_result.get('module_name', '')
+                    # 确保保留项目和模块信息
+                    final_result = {
+                        'project_name': project_name,
+                        'module_name': module_name
                     }
+                    # 合并其他字段
+                    for key, value in result.items():
+                        if key not in ['project_name', 'module_name']:
+                            final_result[key] = value
+                else:
+                    final_result = result
                 
                 cls.update_task(
                     task_id,
                     status='completed',
                     progress=100,
-                    result=result
+                    result=final_result
                 )
                 
             except Exception as e:

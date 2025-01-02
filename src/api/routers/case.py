@@ -199,18 +199,7 @@ async def list_tasks(
     page_size: int = Query(default=10, ge=1, le=100, description="每页数量"),
     db: AsyncSession = Depends(get_db)
 ) -> ResponseModel[List[TaskInfo]]:
-    """获取任务列表
-    
-    Args:
-        type: 任务类型过滤
-        status: 任务状态过滤
-        page: 页码(从1开始)
-        page_size: 每页数量
-        db: 数据库会话
-        
-    Returns:
-        ResponseModel[List[TaskInfo]]: 任务列表
-    """
+    """获取任务列表"""
     try:
         # 计算skip和limit
         skip = (page - 1) * page_size
@@ -227,27 +216,18 @@ async def list_tasks(
         # 转换为响应模型
         task_infos = []
         for task in tasks:
-            # 获取任务相关的测试用例
-            cases, _ = await CaseService.list_cases(
-                db=db,
-                task_id=task['id'],
-                page=1,
-                page_size=1  # 只需要一条用例即可获取项目和模块信息
-            )
-            
-            # 获取项目和模块信息
-            project_name = ""
-            module_name = ""
-            if cases:
-                project_name = cases[0].project
-                module_name = cases[0].module
+            # 获取项目信息
+            project_info = TaskManager._project_info.get(task['id'], {})
+            project_name = project_info.get('project_name', '')
+            module_name = project_info.get('module_name', '')
+            logger.info(f"获取保存的项目信息 - TaskID: {task['id']}, Project: {project_name}, Module: {module_name}")
             
             # 转换任务结果
             result = None
             if task.get('result'):
                 if isinstance(task['result'], dict) and task['result'].get('progress'):
-                    result = task['result']
-                    # 添加项目和模块信息
+                    result = task['result'].copy()
+                    # 确保包含项目信息
                     result['project_name'] = project_name
                     result['module_name'] = module_name
                 else:
@@ -280,12 +260,21 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
             
+        # 获取项目信息
+        project_info = TaskManager._project_info.get(task_id, {})
+        project_name = project_info.get('project_name', '')
+        module_name = project_info.get('module_name', '')
+        logger.info(f"获取保存的项目信息 - TaskID: {task_id}, Project: {project_name}, Module: {module_name}")
+            
         # 转换任务结果
         result = None
         if task.get('result'):
             if isinstance(task['result'], dict) and task['result'].get('progress'):
                 # 处理进度信息
                 result = task['result'].copy()
+                # 确保包含项目信息
+                result['project_name'] = project_name
+                result['module_name'] = module_name
                 # 如果有 path 字段，将其转换为列表
                 if 'path' in result and isinstance(result['path'], str):
                     result['path'] = result['path'].split(';') if result['path'] else []
@@ -300,8 +289,8 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
                     try:
                         case_info = CaseInfo(
                             case_id=case_id,
-                            project=case.get('project', ''),
-                            module=case.get('module', ''),
+                            project=case.get('project', project_name),
+                            module=case.get('module', module_name),
                             name=case.get('name', ''),
                             level=case.get('level', ''),
                             status=case.get('status', ''),

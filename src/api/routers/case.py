@@ -219,8 +219,6 @@ async def list_tasks(
             # 获取项目信息
             project_info = TaskManager._project_info.get(task['id'], {})
             project_name = project_info.get('project_name', '')
-            module_name = project_info.get('module_name', '')
-            logger.info(f"获取保存的项目信息 - TaskID: {task['id']}, Project: {project_name}, Module: {module_name}")
             
             # 转换任务结果
             result = None
@@ -229,7 +227,17 @@ async def list_tasks(
                     result = task['result'].copy()
                     # 确保包含项目信息
                     result['project_name'] = project_name
-                    result['module_name'] = module_name
+                    
+                    # 获取所有相关用例的模块名称
+                    cases, _ = await CaseService.list_cases(
+                        db=db,
+                        task_id=task['id'],
+                        page=1,
+                        page_size=1000  # 设置较大的页面大小以获取所有用例
+                    )
+                    # 提取所有不重复的模块名称
+                    module_names = sorted(list(set(case.module for case in cases if case.module)))
+                    result['module_names'] = module_names
                 else:
                     result = task['result']
             
@@ -252,7 +260,7 @@ async def list_tasks(
         raise HTTPException(status_code=500, detail="获取任务列表失败")
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
+async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)) -> ResponseModel[TaskInfo]:
     """获取任务状态"""
     try:
         # 获取任务信息
@@ -263,8 +271,6 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
         # 获取项目信息
         project_info = TaskManager._project_info.get(task_id, {})
         project_name = project_info.get('project_name', '')
-        module_name = project_info.get('module_name', '')
-        logger.info(f"获取保存的项目信息 - TaskID: {task_id}, Project: {project_name}, Module: {module_name}")
             
         # 转换任务结果
         result = None
@@ -274,7 +280,18 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
                 result = task['result'].copy()
                 # 确保包含项目信息
                 result['project_name'] = project_name
-                result['module_name'] = module_name
+                
+                # 获取所有相关用例的模块名称
+                cases, _ = await CaseService.list_cases(
+                    db=db,
+                    task_id=task_id,
+                    page=1,
+                    page_size=1000  # 设置较大的页面大小以获取所有用例
+                )
+                # 提取所有不重复的模块名称
+                module_names = sorted(list(set(case.module for case in cases if case.module)))
+                result['module_names'] = module_names
+                
                 # 如果有 path 字段，将其转换为列表
                 if 'path' in result and isinstance(result['path'], str):
                     result['path'] = result['path'].split(';') if result['path'] else []
@@ -290,7 +307,7 @@ async def get_task_status(task_id: str) -> ResponseModel[TaskInfo]:
                         case_info = CaseInfo(
                             case_id=case_id,
                             project=case.get('project', project_name),
-                            module=case.get('module', module_name),
+                            module=case.get('module', ''),
                             name=case.get('name', ''),
                             level=case.get('level', ''),
                             status=case.get('status', ''),

@@ -508,7 +508,7 @@ class CaseService:
                 query = query.where(TestCase.task_id == task_id)
                 
             # 按创建时间倒序排序
-            query = query.order_by(TestCase.created_at.desc())
+            query = query.order_by(TestCase.created_at.asc())
             
             # 获取总数
             count_query = select(func.count()).select_from(query.subquery())

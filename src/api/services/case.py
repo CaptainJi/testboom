@@ -816,7 +816,7 @@ class CaseService:
         try:
             # 查询该任务关联的所有用例
             result = await db.execute(
-                select(Case).where(Case.task_id == task_id)
+                select(TestCase).where(TestCase.task_id == task_id)
             )
             cases = result.scalars().all()
             

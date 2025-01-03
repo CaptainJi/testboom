@@ -466,6 +466,7 @@ class CaseService:
         db: AsyncSession,
         project: Optional[str] = None,
         module: Optional[str] = None,
+        modules: Optional[List[str]] = None,
         task_id: Optional[str] = None,
         page: int = 1,
         page_size: int = 10
@@ -475,7 +476,8 @@ class CaseService:
         Args:
             db: 数据库会话
             project: 项目名称过滤
-            module: 模块名称过滤
+            module: 模块名称过滤（单个模块）
+            modules: 模块名称列表过滤（多个模块）
             task_id: 任务ID过滤
             page: 页码(从1开始)
             page_size: 每页数量
@@ -490,7 +492,9 @@ class CaseService:
             # 添加过滤条件
             if project:
                 query = query.where(TestCase.project == project)
-            if module:
+            if modules:
+                query = query.where(TestCase.module.in_(modules))
+            elif module:
                 query = query.where(TestCase.module == module)
             if task_id:
                 query = query.where(TestCase.task_id == task_id)

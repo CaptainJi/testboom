@@ -388,6 +388,7 @@ async def get_case(
 async def list_cases(
     project: Optional[str] = Query(default=None, description="项目名称过滤"),
     module: Optional[str] = Query(default=None, description="模块名称过滤"),
+    modules: Optional[List[str]] = Query(None, description="模块名称列表，多个模块用逗号分隔"),
     task_id: Optional[str] = Query(default=None, description="任务ID过滤"),
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=10, ge=1, le=100, description="每页数量"),
@@ -397,7 +398,8 @@ async def list_cases(
     
     Args:
         project: 项目名称过滤
-        module: 模块名称过滤
+        module: 模块名称过滤（单个模块）
+        modules: 模块名称列表过滤（多个模块）
         task_id: 任务ID过滤
         page: 页码(从1开始)
         page_size: 每页数量
@@ -411,6 +413,7 @@ async def list_cases(
             db,
             project=project,
             module=module,
+            modules=modules,
             task_id=task_id,
             page=page,
             page_size=page_size
@@ -722,9 +725,16 @@ async def download_plantuml(task_id: str) -> FileResponse:
 @router.get("/plantuml/status/{task_id}")
 async def get_task_plantuml(
     task_id: str,
+    modules: Optional[List[str]] = Query(None, description="模块名称列表，多个模块用逗号分隔"),
     db: AsyncSession = Depends(get_db)
 ) -> ResponseModel[str]:
-    """获取任务生成的PlantUML思维导图结果"""
+    """获取任务生成的PlantUML思维导图结果
+    
+    Args:
+        task_id: 任务ID
+        modules: 模块名称列表，如果指定则只返回这些模块的用例思维导图
+        db: 数据库会话
+    """
     try:
         # 获取任务信息
         task = TaskManager.get_task_info(task_id)
@@ -743,7 +753,8 @@ async def get_task_plantuml(
             task_id=task_id,
             page=1,
             page_size=1000,  # 设置一个足够大的数字以获取所有用例
-            db=db
+            db=db,
+            modules=modules  # 添加模块筛选
         )
         
         if not cases:

@@ -678,7 +678,7 @@ async def download_plantuml(task_id: str) -> FileResponse:
 @router.get("/plantuml/status/{task_id}")
 async def get_task_plantuml(
     task_id: str,
-    modules: Optional[List[str]] = Query(None, description="模块名称列表，多个模块用逗号分隔"),
+    modules: Optional[str] = Query(None, description="模块名称列表，多个模块用逗号分隔"),
     db: AsyncSession = Depends(get_db)
 ) -> ResponseModel[str]:
     """获取任务生成的PlantUML思维导图结果"""
@@ -695,13 +695,18 @@ async def get_task_plantuml(
                 detail=f"任务尚未完成，当前状态: {task['status']}"
             )
         
+        # 处理模块列表
+        module_list = None
+        if modules:
+            module_list = [m.strip() for m in modules.split(',') if m.strip()]
+        
         # 获取该任务相关的所有测试用例（不分页）
         cases, total = await CaseService.list_cases(
             task_id=task_id,
             page=1,
             page_size=1000,
             db=db,
-            modules=modules
+            modules=module_list
         )
         
         if not cases:

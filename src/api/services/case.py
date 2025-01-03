@@ -476,40 +476,46 @@ class CaseService:
         Args:
             db: 数据库会话
             project: 项目名称过滤
-            module: 模块名称过滤（单个模块）
-            modules: 模块名称列表过滤（多个模块）
+            module: 模块名称过滤（单个）
+            modules: 模块名称列表过滤（多个）
             task_id: 任务ID过滤
-            page: 页码(从1开始)
+            page: 页码
             page_size: 每页数量
             
         Returns:
             Tuple[List[TestCase], int]: 用例列表和总数
         """
         try:
-            # 构建查询
+            # 构建查询条件
             query = select(TestCase)
             
-            # 添加过滤条件
             if project:
                 query = query.where(TestCase.project == project)
-            if modules:
-                query = query.where(TestCase.module.in_(modules))
-            elif module:
+                
+            if module:
                 query = query.where(TestCase.module == module)
+                
+            if modules:
+                # 确保modules是列表
+                if isinstance(modules, str):
+                    modules = [modules]
+                # 过滤掉空值
+                modules = [m for m in modules if m]
+                if modules:
+                    query = query.where(TestCase.module.in_(modules))
+                
             if task_id:
                 query = query.where(TestCase.task_id == task_id)
-            
-            # 添加排序(按创建时间倒序)
+                
+            # 按创建时间倒序排序
             query = query.order_by(TestCase.created_at.desc())
             
-            # 计算分页
-            skip = (page - 1) * page_size
-            
             # 获取总数
-            total = await db.scalar(select(func.count()).select_from(query.subquery()))
+            count_query = select(func.count()).select_from(query.subquery())
+            total = await db.scalar(count_query)
             
-            # 添加分页
-            query = query.offset(skip).limit(page_size)
+            # 分页
+            query = query.limit(page_size).offset((page - 1) * page_size)
             
             # 执行查询
             result = await db.execute(query)

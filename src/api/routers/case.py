@@ -193,7 +193,7 @@ async def generate_cases(
 
 @router.get("/tasks")
 async def list_tasks(
-    type: Optional[str] = None,
+    task_type: Optional[str] = None,
     status: Optional[str] = None,
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=10, ge=1, le=100, description="每页数量"),
@@ -201,45 +201,31 @@ async def list_tasks(
 ) -> ResponseModel[List[TaskInfo]]:
     """获取任务列表"""
     try:
-        # 计算skip和limit
-        skip = (page - 1) * page_size
-        limit = page_size
-            
         # 获取任务列表
-        tasks = TaskManager.list_tasks(
-            type=type, 
+        tasks, total = await TaskManager.list_tasks(
+            task_type=task_type, 
             status=status, 
-            skip=skip,
-            limit=limit
+            page=page,
+            page_size=page_size
         )
         
         # 转换为响应模型
         task_infos = []
         for task in tasks:
-            # 获取项目信息
-            project_info = TaskManager._project_info.get(task['id'], {})
-            project_name = project_info.get('project_name', '')
+            result = task.get('result')
             
-            # 转换任务结果
-            result = None
-            if task.get('result'):
-                if isinstance(task['result'], dict) and task['result'].get('progress'):
-                    result = task['result'].copy()
-                    # 确保包含项目信息
-                    result['project_name'] = project_name
-                    
-                    # 获取所有相关用例的模块名称
-                    cases, _ = await CaseService.list_cases(
-                        db=db,
-                        task_id=task['id'],
-                        page=1,
-                        page_size=1000  # 设置较大的页面大小以获取所有用例
-                    )
-                    # 提取所有不重复的模块名称
-                    module_names = sorted(list(set(case.module for case in cases if case.module)))
-                    result['module_names'] = module_names
-                else:
-                    result = task['result']
+            # 如果有结果且包含进度信息
+            if isinstance(result, dict) and result.get('progress'):
+                # 获取所有相关用例的模块名称
+                cases, _ = await CaseService.list_cases(
+                    db=db,
+                    task_id=task['id'],
+                    page=1,
+                    page_size=1000
+                )
+                # 提取所有不重复的模块名称
+                module_names = sorted(list(set(case.module for case in cases if case.module)))
+                result['module_names'] = module_names
             
             task_info = TaskInfo(
                 task_id=task['id'],
@@ -264,72 +250,39 @@ async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)) -> R
     """获取任务状态"""
     try:
         # 获取任务信息
-        task = TaskManager.get_task_info(task_id)
+        task = await TaskManager.get_task_info(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
             
-        # 获取项目信息
-        project_info = TaskManager._project_info.get(task_id, {})
-        project_name = project_info.get('project_name', '')
-            
         # 转换任务结果
-        result = None
-        if task.get('result'):
-            if isinstance(task['result'], dict) and task['result'].get('progress'):
-                # 处理进度信息
-                result = task['result'].copy()
-                # 确保包含项目信息
-                result['project_name'] = project_name
-                
-                # 获取所有相关用例的模块名称
-                cases, _ = await CaseService.list_cases(
-                    db=db,
-                    task_id=task_id,
-                    page=1,
-                    page_size=1000  # 设置较大的页面大小以获取所有用例
-                )
-                # 提取所有不重复的模块名称
-                module_names = sorted(list(set(case.module for case in cases if case.module)))
-                result['module_names'] = module_names
-                
-                # 如果有 path 字段，将其转换为列表
-                if 'path' in result and isinstance(result['path'], str):
-                    result['path'] = result['path'].split(';') if result['path'] else []
-            else:
-                # 处理用例列表
-                result = []
-                for case in task['result']:
-                    # 记录每个用例的ID
-                    case_id = case.get('id') or case.get('content', {}).get('id')
-                    logger.debug(f"处理用例: id={case_id}")
-                    
-                    try:
-                        case_info = CaseInfo(
-                            case_id=case_id,
-                            project=case.get('project', project_name),
-                            module=case.get('module', ''),
-                            name=case.get('name', ''),
-                            level=case.get('level', ''),
-                            status=case.get('status', ''),
-                            content=case.get('content', {})
-                        )
-                        result.append(case_info)
-                        logger.debug(f"转换后的用例信息: {case_info}")
-                    except Exception as e:
-                        logger.error(f"转换用例信息失败: {str(e)}, 用例数据: {case}")
-                        continue
-
+        result = task.get('result')
+        if isinstance(result, dict) and result.get('progress'):
+            # 获取所有相关用例的模块名称
+            cases, _ = await CaseService.list_cases(
+                db=db,
+                task_id=task_id,
+                page=1,
+                page_size=1000
+            )
+            # 提取所有不重复的模块名称
+            module_names = sorted(list(set(case.module for case in cases if case.module)))
+            result['module_names'] = module_names
+            
+            # 如果有 path 字段，将其转换为列表
+            if 'path' in result and isinstance(result['path'], str):
+                result['path'] = result['path'].split(';') if result['path'] else []
+        
         task_info = TaskInfo(
             task_id=task['id'],
             type=task['type'],
             status=task['status'],
             progress=task['progress'],
             result=result,
-            error=task['error'],
+            error=task.get('error'),
             created_at=task['created_at'].isoformat(),
             updated_at=task['updated_at'].isoformat()
         )
-            
+        
         return ResponseModel(data=task_info)
         
     except HTTPException:
@@ -574,7 +527,7 @@ async def generate_plantuml_async(
             raise HTTPException(status_code=500, detail="用例内容格式错误")
         
         # 创建异步任务
-        task_id = TaskManager.create_task(
+        task_id = await TaskManager.create_task(
             task_type="plantuml_generation",  # 修改任务类型
             params={
                 "case_id": case_id,
@@ -605,7 +558,7 @@ async def process_plantuml_task(
     """处理PlantUML生成任务"""
     try:
         # 更新任务状态为处理中
-        TaskManager.update_task(task_id, status="processing", progress=10)
+        await TaskManager.update_task(task_id, status="processing", progress=10)
         
         # 生成PlantUML代码
         chat_manager = ChatManager()
@@ -614,19 +567,19 @@ async def process_plantuml_task(
             diagram_type
         )
         if not plantuml_code:
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 status="failed",
                 error="生成PlantUML代码失败"
             )
             return
             
-        TaskManager.update_task(task_id, progress=50)
+        await TaskManager.update_task(task_id, progress=50)
         
         # 渲染图片
         image_data = await render_plantuml(plantuml_code, format)
         if not image_data:
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 status="failed",
                 error="渲染图片失败"
@@ -642,7 +595,7 @@ async def process_plantuml_task(
             f.write(image_data)
             
         # 更新任务状态为完成
-        TaskManager.update_task(
+        await TaskManager.update_task(
             task_id,
             status="completed",
             progress=100,
@@ -655,22 +608,22 @@ async def process_plantuml_task(
         
     except Exception as e:
         logger.error(f"处理PlantUML任务失败: {str(e)}")
-        TaskManager.update_task(
+        await TaskManager.update_task(
             task_id,
             status="failed",
             error=str(e)
         )
 
-@router.get("/plantuml/tasks/{task_id}")  # 修改路由路径
+@router.get("/plantuml/tasks/{task_id}")
 async def get_plantuml_task_status(task_id: str) -> ResponseModel[Dict[str, Any]]:
     """获取PlantUML生成任务状态"""
     try:
         # 获取任务信息
-        task = TaskManager.get_task_info(task_id)
+        task = await TaskManager.get_task_info(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
             
-        if task["type"] != "plantuml_generation":  # 修改任务类型判断
+        if task["type"] != "plantuml_generation":
             raise HTTPException(status_code=400, detail="不是PlantUML生成任务")
             
         # 如果任务完成且有结果，添加文件下载链接
@@ -697,7 +650,7 @@ async def download_plantuml(task_id: str) -> FileResponse:
     """下载生成的PlantUML图片"""
     try:
         # 获取任务信息
-        task = TaskManager.get_task_info(task_id)
+        task = await TaskManager.get_task_info(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
             
@@ -728,16 +681,10 @@ async def get_task_plantuml(
     modules: Optional[List[str]] = Query(None, description="模块名称列表，多个模块用逗号分隔"),
     db: AsyncSession = Depends(get_db)
 ) -> ResponseModel[str]:
-    """获取任务生成的PlantUML思维导图结果
-    
-    Args:
-        task_id: 任务ID
-        modules: 模块名称列表，如果指定则只返回这些模块的用例思维导图
-        db: 数据库会话
-    """
+    """获取任务生成的PlantUML思维导图结果"""
     try:
         # 获取任务信息
-        task = TaskManager.get_task_info(task_id)
+        task = await TaskManager.get_task_info(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         
@@ -752,9 +699,9 @@ async def get_task_plantuml(
         cases, total = await CaseService.list_cases(
             task_id=task_id,
             page=1,
-            page_size=1000,  # 设置一个足够大的数字以获取所有用例
+            page_size=1000,
             db=db,
-            modules=modules  # 添加模块筛选
+            modules=modules
         )
         
         if not cases:
@@ -780,4 +727,36 @@ async def get_task_plantuml(
         raise
     except Exception as e:
         logger.error(f"获取任务PlantUML失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(
+    task_id: str,
+    delete_cases: bool = Query(False, description="是否同时删除关联的用例"),
+    db: AsyncSession = Depends(get_db)
+) -> ResponseModel[bool]:
+    """删除任务
+    
+    Args:
+        task_id: 任务ID
+        delete_cases: 是否同时删除关联的用例
+        db: 数据库会话
+        
+    Returns:
+        ResponseModel[bool]: 删除结果
+    """
+    try:
+        success = await TaskManager.delete_task(task_id, delete_cases, db)
+        if not success:
+            raise HTTPException(status_code=404, detail="任务不存在或删除失败")
+            
+        return ResponseModel(
+            message="任务删除成功",
+            data=True
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="删除任务失败") 

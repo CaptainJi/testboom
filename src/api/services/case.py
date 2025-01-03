@@ -54,7 +54,7 @@ class CaseService:
             }
             logger.info(f"创建任务参数 - Params: {task_params}")
             
-            task_id = TaskManager.create_task(
+            task_id = await TaskManager.create_task(
                 task_type="generate_cases",
                 params=task_params
             )
@@ -76,7 +76,7 @@ class CaseService:
         except Exception as e:
             logger.error(f"启动用例生成任务失败: {str(e)}")
             if 'task_id' in locals():
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status='failed',
                     error=str(e)
@@ -123,7 +123,7 @@ class CaseService:
                     raise ValueError("生成用例失败")
                 
                 # 更新任务状态 - 开始保存用例
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     result={
                         'progress': '正在保存测试用例...',
@@ -144,7 +144,7 @@ class CaseService:
                 await session.commit()
                 
                 # 更新任务状态 - 完成
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status='completed',
                     result={
@@ -171,7 +171,7 @@ class CaseService:
                     await session.commit()
             
             # 更新任务状态 - 失败
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 status='failed',
                 error=error_msg
@@ -232,7 +232,7 @@ class CaseService:
                 # 更新任务状态 - 开始分析需求
                 if task_id:
                     logger.info(f"更新任务状态，任务ID: {task_id}, 项目名称: {project_name}")
-                    TaskManager.update_task(
+                    await TaskManager.update_task(
                         task_id,
                         result={
                             'progress': f'正在分析需求文档 (共{len(image_files)}张图片)...',
@@ -242,11 +242,11 @@ class CaseService:
                     )
                 
                 # 定义状态更新回调
-                def update_progress(current: int, total: int, stage: str = 'analyze'):
+                async def update_progress(current: int, total: int, stage: str = 'analyze'):
                     if task_id:
                         logger.info(f"更新进度，阶段: {stage}, 当前: {current}, 总数: {total}, 项目名称: {project_name}")
                         if stage == 'analyze':
-                            TaskManager.update_task(
+                            await TaskManager.update_task(
                                 task_id,
                                 result={
                                     'progress': f'正在分析第 {current}/{total} 张图片...',
@@ -257,7 +257,7 @@ class CaseService:
                                 }
                             )
                         elif stage == 'generate':
-                            TaskManager.update_task(
+                            await TaskManager.update_task(
                                 task_id,
                                 result={
                                     'progress': f'正在生成测试用例...',
@@ -270,7 +270,7 @@ class CaseService:
                 summary = await chat_manager.analyze_requirement(
                     content=f"模块名称: {module_name}" if module_name else "",
                     image_paths=image_files,
-                    progress_callback=lambda c, t: update_progress(c, t, 'analyze')
+                    progress_callback=update_progress
                 )
                 
                 if not summary:
@@ -278,7 +278,7 @@ class CaseService:
                 
                 # 更新任务状态 - 开始生成用例
                 if task_id:
-                    TaskManager.update_task(
+                    await TaskManager.update_task(
                         task_id,
                         result={
                             'progress': '正在生成功能架构相关测试用例...',
@@ -299,7 +299,7 @@ class CaseService:
                         ]
                     },
                     project_name=project_name,
-                    progress_callback=lambda stage, _: update_progress(1, None, 'generate')
+                    progress_callback=update_progress
                 )
                 
                 if not testcases:
@@ -307,7 +307,7 @@ class CaseService:
                 
                 # 更新任务状态 - 用例生成完成
                 if task_id:
-                    TaskManager.update_task(
+                    await TaskManager.update_task(
                         task_id,
                         result={
                             'progress': '测试用例生成完成，准备保存...',
@@ -649,7 +649,7 @@ class CaseService:
         """处理用例生成任务"""
         try:
             # 更新任务状态为处理中
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 status="processing",
                 progress=10,
@@ -664,14 +664,14 @@ class CaseService:
             file_service = FileService()
             file_content = await file_service.get_file_content(file_id)
             if not file_content:
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status="failed",
                     error="获取文件内容失败"
                 )
                 return
             
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 progress=30,
                 result={
@@ -689,14 +689,14 @@ class CaseService:
             )
             
             if not analysis_result:
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status="failed",
                     error="需求分析失败"
                 )
                 return
             
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 progress=60,
                 result={
@@ -713,14 +713,14 @@ class CaseService:
             )
             
             if not testcases:
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status="failed",
                     error="用例生成失败"
                 )
                 return
             
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 progress=80,
                 result={
@@ -737,7 +737,7 @@ class CaseService:
             )
             
             if not plantuml_code:
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status="failed",
                     error="生成思维导图失败"
@@ -761,7 +761,7 @@ class CaseService:
                         saved_cases.append(case_model)
             
             if not saved_cases:
-                TaskManager.update_task(
+                await TaskManager.update_task(
                     task_id,
                     status="failed",
                     error="保存用例失败"
@@ -769,7 +769,7 @@ class CaseService:
                 return
             
             # 只更新一次任务状态，包含所有信息
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 status="completed",
                 progress=100,
@@ -796,9 +796,38 @@ class CaseService:
             
         except Exception as e:
             logger.error(f"处理用例生成任务失败: {str(e)}")
-            TaskManager.update_task(
+            await TaskManager.update_task(
                 task_id,
                 status="failed",
                 error=str(e)
             )
+    
+    @classmethod
+    async def delete_cases_by_task_id(cls, task_id: str, db: AsyncSession) -> bool:
+        """删除指定任务关联的所有用例
+        
+        Args:
+            task_id: 任务ID
+            db: 数据库会话
+            
+        Returns:
+            bool: 是否删除成功
+        """
+        try:
+            # 查询该任务关联的所有用例
+            result = await db.execute(
+                select(Case).where(Case.task_id == task_id)
+            )
+            cases = result.scalars().all()
+            
+            # 删除所有用例
+            for case in cases:
+                await db.delete(case)
+                
+            await db.commit()
+            return True
+            
+        except Exception as e:
+            logger.error(f"删除任务关联用例失败[{task_id}]: {str(e)}")
+            return False
     

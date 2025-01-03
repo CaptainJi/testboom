@@ -14,6 +14,9 @@ from src.api.services.task import TaskManager
 import aiohttp
 import asyncio
 import uuid
+from sqlalchemy import select
+from src.db.session import AsyncSessionLocal
+from src.api.models.task import Task
 
 class ZhipuAI:
     """智谱AI API封装"""
@@ -202,20 +205,31 @@ class ZhipuAI:
                 logger.info(f"正在处理第 {index}/{total_images} 张图片: {path}")
                 
                 # 更新任务进度
-                for task_id, task in TaskManager._tasks.items():
-                    if task['type'] == 'generate_cases' and task['status'] == 'running':
-                        progress_msg = f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片"
-                        logger.debug(f"更新任务进度 - TaskID: {task_id}, Progress: {progress_msg}")
-                        
-                        TaskManager.update_task(
-                            task_id,
-                            result={
-                                'progress': progress_msg,
-                                'current': index,
-                                'total': total_images
-                            }
+                try:
+                    # 查找正在运行的生成用例任务
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(Task).where(
+                                Task.type == 'generate_cases',
+                                Task.status == 'running'
+                            )
                         )
-                        break
+                        task = result.scalar_one_or_none()
+                        
+                        if task:
+                            progress_msg = f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片"
+                            logger.debug(f"更新任务进度 - TaskID: {task.id}, Progress: {progress_msg}")
+                            
+                            await TaskManager.update_task(
+                                task.id,
+                                result={
+                                    'progress': progress_msg,
+                                    'current': index,
+                                    'total': total_images
+                                }
+                            )
+                except Exception as e:
+                    logger.error(f"更新任务进度失败: {str(e)}")
                 
                 image_content = self._process_image(path)
                 if not image_content:

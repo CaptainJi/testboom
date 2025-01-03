@@ -1,5 +1,6 @@
 from .base import Base
 from .models import File, TestCase
+from src.api.models.task import Task
 from .session import get_db, engine
 from loguru import logger
 
@@ -7,6 +8,7 @@ __all__ = [
     "Base",
     "File",
     "TestCase",
+    "Task",
     "get_db",
     "engine"
 ]

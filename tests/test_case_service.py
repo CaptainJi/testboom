@@ -149,6 +149,7 @@ async def test_update_case(db_session: AsyncSession, test_cases: List[TestCase])
         level="P0",
         status="completed",
         content={"name": "updated_case", "steps": ["new_step"]},
+        remark="测试更新",
         db=db_session
     )
     
@@ -164,6 +165,84 @@ async def test_update_case(db_session: AsyncSession, test_cases: List[TestCase])
     content = json.loads(updated_case.content)
     assert content["name"] == "updated_case"
     assert content["steps"] == ["new_step"]
+    
+    # 验证修改历史
+    assert len(updated_case.history) == 6  # project, module, name, level, status, content
+    
+    # 验证每个字段的修改记录
+    history_fields = [h.field for h in updated_case.history]
+    assert "project" in history_fields
+    assert "module" in history_fields
+    assert "name" in history_fields
+    assert "level" in history_fields
+    assert "status" in history_fields
+    assert "content" in history_fields
+    
+    # 验证修改说明
+    for history in updated_case.history:
+        assert history.remark == "测试更新"
+        
+@pytest.mark.asyncio
+async def test_update_case_no_changes(db_session: AsyncSession, test_cases: List[TestCase]):
+    """测试更新用例信息但没有实际变化"""
+    # 获取第一个测试用例
+    test_case = test_cases[0]
+    
+    # 使用相同的值更新用例
+    updated_case = await CaseService.update_case(
+        case_id=test_case.id,
+        project=test_case.project,
+        module=test_case.module,
+        name=test_case.name,
+        level=test_case.level,
+        status=test_case.status,
+        content=json.loads(test_case.content),
+        remark="无变化更新",
+        db=db_session
+    )
+    
+    # 验证结果
+    assert updated_case is not None
+    assert len(updated_case.history) == 0  # 没有修改历史记录
+    
+@pytest.mark.asyncio
+async def test_update_case_partial(db_session: AsyncSession, test_cases: List[TestCase]):
+    """测试部分更新用例信息"""
+    # 获取第一个测试用例
+    test_case = test_cases[0]
+    
+    # 只更新部分字段
+    updated_case = await CaseService.update_case(
+        case_id=test_case.id,
+        name="new_name",
+        level="P1",
+        remark="部分更新",
+        db=db_session
+    )
+    
+    # 验证结果
+    assert updated_case is not None
+    assert updated_case.name == "new_name"
+    assert updated_case.level == "P1"
+    assert updated_case.project == test_case.project  # 未修改的字段保持不变
+    assert updated_case.module == test_case.module    # 未修改的字段保持不变
+    
+    # 验证修改历史
+    assert len(updated_case.history) == 2  # 只有name和level的修改记录
+    history_fields = [h.field for h in updated_case.history]
+    assert "name" in history_fields
+    assert "level" in history_fields
+    
+@pytest.mark.asyncio
+async def test_update_case_invalid_id(db_session: AsyncSession):
+    """测试更新不存在的用例"""
+    with pytest.raises(ValueError) as exc_info:
+        await CaseService.update_case(
+            case_id="invalid_id",
+            name="new_name",
+            db=db_session
+        )
+    assert str(exc_info.value) == "用例不存在"
 
 @pytest.mark.asyncio
 async def test_generate_cases_from_file(db_session: AsyncSession, test_file: File):
@@ -180,4 +259,4 @@ async def test_generate_cases_from_file(db_session: AsyncSession, test_file: Fil
     assert task_id is not None
     
     # 注意:这里不验证实际的用例生成过程,因为它是异步的
-    # 实际应用中应该等待任务完成并验证生成的用��
+    # 实际应用中应该等待任务完成并验证生成的用例

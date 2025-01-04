@@ -2,7 +2,7 @@ import json
 from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from src.db.models import TestCase, File
+from src.db.models import TestCase, File, TestCaseHistory
 from src.api.services.file import FileService
 from src.ai_core.chat_manager import ChatManager
 from src.api.services.task import TaskManager
@@ -17,6 +17,7 @@ from pathlib import Path
 import uuid
 import httpx
 from sqlalchemy import func
+from datetime import datetime
 
 class CaseService:
     """用例服务"""
@@ -598,23 +599,10 @@ class CaseService:
         level: Optional[str] = None,
         status: Optional[str] = None,
         content: Optional[Dict] = None,
+        remark: Optional[str] = None,
         db: AsyncSession = None
     ) -> Optional[TestCase]:
-        """更新测试用例信息
-        
-        Args:
-            case_id: 用例ID
-            project: 项目名称
-            module: 模块名称
-            name: 用例名称
-            level: 用例等级
-            status: 用例状态
-            content: 用例内容
-            db: 数据库会话
-            
-        Returns:
-            Optional[TestCase]: 更新后的用例信息
-        """
+        """更新测试用例信息"""
         try:
             # 获取用例信息
             result = await db.execute(
@@ -625,29 +613,93 @@ class CaseService:
             if not case:
                 raise ValueError("用例不存在")
             
-            # 更新字段
-            if project is not None:
+            # 记录修改历史
+            changes = []
+            
+            # 更新字段并记录变更
+            if project is not None and project != case.project:
+                changes.append(TestCaseHistory(
+                    case_id=case_id,
+                    field="project",
+                    old_value=json.dumps(case.project),
+                    new_value=json.dumps(project),
+                    remark=remark
+                ))
                 case.project = project
-            if module is not None:
+                
+            if module is not None and module != case.module:
+                changes.append(TestCaseHistory(
+                    case_id=case_id,
+                    field="module",
+                    old_value=json.dumps(case.module),
+                    new_value=json.dumps(module),
+                    remark=remark
+                ))
                 case.module = module
-            if name is not None:
+                
+            if name is not None and name != case.name:
+                changes.append(TestCaseHistory(
+                    case_id=case_id,
+                    field="name",
+                    old_value=json.dumps(case.name),
+                    new_value=json.dumps(name),
+                    remark=remark
+                ))
                 case.name = name
-            if level is not None:
+                
+            if level is not None and level != case.level:
+                changes.append(TestCaseHistory(
+                    case_id=case_id,
+                    field="level",
+                    old_value=json.dumps(case.level),
+                    new_value=json.dumps(level),
+                    remark=remark
+                ))
                 case.level = level
-            if status is not None:
+                
+            if status is not None and status != case.status:
+                changes.append(TestCaseHistory(
+                    case_id=case_id,
+                    field="status",
+                    old_value=json.dumps(case.status),
+                    new_value=json.dumps(status),
+                    remark=remark
+                ))
                 case.status = status
+                
             if content is not None:
-                case.content = json.dumps(content)
+                old_content = json.loads(case.content) if case.content else {}
+                if content != old_content:
+                    changes.append(TestCaseHistory(
+                        case_id=case_id,
+                        field="content",
+                        old_value=case.content,
+                        new_value=json.dumps(content),
+                        remark=remark
+                    ))
+                    case.content = json.dumps(content)
             
-            # 保存更新
-            await db.commit()
-            await db.refresh(case)
+            # 如果有修改，添加历史记录
+            if changes:
+                # 更新修改时间
+                case.updated_at = datetime.now()
+                
+                # 保存更改
+                for change in changes:
+                    db.add(change)
+                
+                # 提交事务
+                await db.commit()
+                
+                logger.info(f"用例信息更新成功: {case_id}, 修改字段: {[c.field for c in changes]}")
+            else:
+                logger.info(f"用例信息无变化: {case_id}")
             
-            logger.info(f"用例信息更新成功: {case_id}")
             return case
             
         except Exception as e:
             logger.error(f"用例信息更新失败: {str(e)}")
+            await db.rollback()
             raise
     
     @classmethod

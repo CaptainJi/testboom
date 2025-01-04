@@ -15,6 +15,9 @@ import os
 from src.ai_core.chat_manager import ChatManager
 from src.utils.plantuml import render_plantuml
 import asyncio
+from datetime import datetime
+from sqlalchemy import select
+from src.db.models import TestCaseHistory
 
 router = APIRouter(prefix="/api/v1/cases", tags=["cases"])
 
@@ -63,6 +66,22 @@ class CaseUpdate(BaseModel):
     level: Optional[str] = None
     status: Optional[str] = None
     content: Optional[Dict[str, Any]] = None
+    remark: Optional[str] = None  # 添加修改说明字段
+
+class CaseHistoryInfo(BaseModel):
+    """用例修改历史信息"""
+    field: str
+    old_value: Optional[Any]
+    new_value: Optional[Any]
+    remark: Optional[str]
+    created_at: datetime
+
+class CaseDetailInfo(CaseInfo):
+    """用例详细信息，包含修改历史"""
+    history: List[CaseHistoryInfo]
+    
+    class Config:
+        from_attributes = True
 
 class BatchDeleteCasesRequest(BaseModel):
     """批量删除用例请求模型"""
@@ -442,9 +461,25 @@ async def update_case(
     case_id: str,
     case_update: CaseUpdate,
     db: AsyncSession = Depends(get_db)
-) -> ResponseModel[CaseInfo]:
+) -> ResponseModel[CaseDetailInfo]:
     """更新测试用例信息"""
     try:
+        # 验证用例等级
+        if case_update.level and case_update.level not in ["P0", "P1", "P2", "P3"]:
+            raise HTTPException(
+                status_code=400,
+                detail="无效的用例等级，必须是 P0、P1、P2 或 P3"
+            )
+            
+        # 验证用例状态
+        valid_statuses = ["draft", "ready", "testing", "passed", "failed", "blocked"]
+        if case_update.status and case_update.status not in valid_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的用例状态，必须是以下之一: {', '.join(valid_statuses)}"
+            )
+        
+        # 更新用例
         updated_case = await CaseService.update_case(
             case_id=case_id,
             project=case_update.project,
@@ -453,17 +488,51 @@ async def update_case(
             level=case_update.level,
             status=case_update.status,
             content=case_update.content,
+            remark=case_update.remark,
             db=db
         )
+        
         if not updated_case:
             raise HTTPException(status_code=404, detail="用例不存在")
             
+        # 查询修改历史
+        history_result = await db.execute(
+            select(TestCaseHistory)
+            .where(TestCaseHistory.case_id == case_id)
+            .order_by(TestCaseHistory.created_at.desc())
+        )
+        history_records = history_result.scalars().all()
+        
+        # 转换为响应模型
+        history = [
+            CaseHistoryInfo(
+                field=h.field,
+                old_value=json.loads(h.old_value) if h.old_value else None,
+                new_value=json.loads(h.new_value) if h.new_value else None,
+                remark=h.remark,
+                created_at=h.created_at
+            )
+            for h in history_records
+        ]
+        
         return ResponseModel(
             message="用例信息更新成功",
-            data=CaseInfo.model_validate(updated_case)
+            data=CaseDetailInfo(
+                case_id=updated_case.id,
+                project=updated_case.project,
+                module=updated_case.module,
+                name=updated_case.name,
+                level=updated_case.level,
+                status=updated_case.status,
+                content=json.loads(updated_case.content),
+                history=history
+            )
         )
+        
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"用例信息更新失败: {str(e)}")
         raise HTTPException(status_code=500, detail="用例信息更新失败")

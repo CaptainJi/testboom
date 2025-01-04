@@ -1,7 +1,8 @@
 from typing import Optional
-from sqlalchemy import String, Text, ForeignKey
+from sqlalchemy import String, Text, ForeignKey, JSON, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
+from datetime import datetime
 
 class File(Base):
     """文件模型"""
@@ -33,3 +34,20 @@ class TestCase(Base):
     
     # 任务关联
     task_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    
+    # 修改历史关联
+    history: Mapped[list["TestCaseHistory"]] = relationship(back_populates="case", cascade="all, delete-orphan")
+
+class TestCaseHistory(Base):
+    """测试用例修改历史"""
+    
+    # 基本信息
+    case_id: Mapped[str] = mapped_column(ForeignKey("testcase.id"))
+    field: Mapped[str] = mapped_column(String(50))
+    old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    remark: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    
+    # 关联关系
+    case: Mapped["TestCase"] = relationship(back_populates="history")

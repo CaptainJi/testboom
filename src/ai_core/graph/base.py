@@ -50,7 +50,8 @@ class BaseGraph:
         config = {
             "callbacks": [],
             "tags": ["testboom"],
-            "metadata": {}
+            "metadata": {},
+            "tracing_enabled": settings.ai.LANGSMITH_TRACING_ENABLED
         }
         config.update(kwargs)
         return config 

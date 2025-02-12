@@ -155,9 +155,15 @@ class ChatManager:
             
             # 使用新的chat_graph发送请求
             response = None
+            result = None
             max_retries = 3
+            
             for attempt in range(max_retries):
                 try:
+                    # 更新进度
+                    if progress_callback:
+                        await progress_callback(attempt + 1, max_retries)
+                        
                     response = await (
                         self.chat_graph.chat(
                             messages=messages,
@@ -170,6 +176,13 @@ class ChatManager:
                         logger.warning(f"第{attempt + 1}次尝试未收到响应")
                         continue
                         
+                    # 尝试提取JSON内容
+                    if "```json" in response:
+                        import re
+                        json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+                        if json_match:
+                            response = json_match.group(1)
+                    
                     # 尝试解析JSON
                     result = safe_json_loads(response)
                     if result:
@@ -183,10 +196,6 @@ class ChatManager:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2)  # 等待2秒后重试
                     continue
-                
-                # 更新进度
-                if progress_callback:
-                    progress_callback(attempt + 1, max_retries)
             
             if not response or not result:
                 logger.error("需求分析失败：未能获取有效响应")

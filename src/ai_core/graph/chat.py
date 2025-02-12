@@ -7,6 +7,9 @@ from typing_extensions import TypedDict, NotRequired
 from loguru import logger
 from langgraph.graph import StateGraph, START, END
 from src.ai_core.zhipu_api import ZhipuAI
+from src.ai_core.prompt_template import PromptTemplate
+from src.config.settings import settings
+from pathlib import Path
 
 class ChatState(TypedDict):
     messages: List[Dict[str, str]]
@@ -21,6 +24,11 @@ class ChatGraph:
     def __init__(self):
         # 初始化AI客户端
         self.ai = ZhipuAI()
+        
+        # 初始化提示词模板
+        template_dir = str(settings.BASE_DIR / "resources/prompts")
+        self.template = PromptTemplate(template_dir=template_dir)
+        logger.info(f"已加载提示词模板，目录: {template_dir}")
         
         # 初始化图
         self.graph = StateGraph(state_schema=ChatState)
@@ -37,6 +45,29 @@ class ChatGraph:
         # 编译图
         self.workflow = self.graph.compile()
 
+    def get_config(self, response_format=None, timeout=None, callbacks=None, tags=None, metadata=None):
+        """获取配置信息
+        
+        Args:
+            response_format: 响应格式
+            timeout: 超时时间
+            callbacks: 回调函数列表
+            tags: 标签列表
+            metadata: 元数据
+            
+        Returns:
+            dict: 配置信息
+        """
+        config = {
+            "response_format": response_format,
+            "timeout": timeout,
+            "callbacks": callbacks or [],
+            "tags": tags or ["testboom"],
+            "metadata": metadata or {},
+            "tracing_enabled": settings.ai.LANGSMITH_TRACING_ENABLED
+        }
+        return config
+
     async def _process_message(self, state: ChatState) -> ChatState:
         """处理消息"""
         try:
@@ -49,9 +80,15 @@ class ChatGraph:
             template_name = state.get("template_name")
             template_args = state.get("template_args", {})
             if template_name:
-                # TODO: 从模板生成提示词
-                prompt = f"使用{template_name}模板，参数：{template_args}"
-                messages.insert(0, {"role": "system", "content": prompt})
+                try:
+                    # 使用模板生成提示词
+                    prompt = self.template.render(template_name, **(template_args or {}))
+                    if prompt:
+                        messages.insert(0, {"role": "system", "content": prompt})
+                    else:
+                        logger.warning(f"模板 {template_name} 渲染失败，将继续处理原始消息")
+                except Exception as e:
+                    logger.warning(f"处理模板 {template_name} 失败: {str(e)}，将继续处理原始消息")
                 
             state["messages"] = messages
             return state
@@ -71,14 +108,43 @@ class ChatGraph:
             response_format = state.get("response_format")
             timeout = state.get("timeout", 60)
             
-            # 调用AI生成响应
-            response = await self.ai.chat(
-                messages=messages,
-                timeout=timeout
+            # 获取运行配置
+            config = self.get_config(
+                callbacks=[],
+                tags=["testboom", "chat"],
+                metadata={
+                    "template_name": state.get("template_name"),
+                    "response_format": response_format,
+                    "timeout": timeout
+                }
             )
             
+            # 检查是否包含图片
+            image_paths = []
+            for msg in messages:
+                if isinstance(msg, dict) and msg.get("images"):
+                    image_paths.extend(msg["images"])
+            
+            # 根据是否有图片选择不同的调用方法
+            if image_paths:
+                logger.info(f"使用视觉模型处理 {len(image_paths)} 张图片")
+                response = await self.ai.chat_with_images(
+                    messages=messages,
+                    image_paths=image_paths,
+                    task_id=state.get("task_id"),
+                    config=config
+                )
+            else:
+                logger.info("使用对话模型处理请求")
+                response = await self.ai.chat(
+                    messages=messages,
+                    response_format=response_format,
+                    timeout=timeout,
+                    config=config
+                )
+            
             # 处理JSON格式
-            if response_format and response_format.get("type") == "json_object":
+            if response and response_format and response_format.get("type") == "json_object":
                 if not response.strip().startswith("{"):
                     # 提取JSON内容
                     import re

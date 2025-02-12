@@ -12,6 +12,7 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from pydantic import Field
 import json
 import asyncio
+from .graph.base import BaseGraph
 
 class ChatMemory(BaseMemory):
     """自定义聊天记忆管理"""
@@ -66,6 +67,10 @@ class ChatManager:
     
     def __init__(self):
         """初始化对话管理器"""
+        # 初始化 LangSmith
+        self.base_graph = BaseGraph()  # 这会初始化 LangSmith
+        
+        # 初始化其他组件
         self.chat_graph = ChatGraph()
         self.template = PromptTemplate()
         self.memory = ChatMemory()
@@ -168,7 +173,13 @@ class ChatManager:
                         self.chat_graph.chat(
                             messages=messages,
                             response_format={"type": "json_object"},
-                            timeout=180  # 3分钟超时
+                            timeout=180,  # 3分钟超时
+                            metadata={
+                                "task_type": "requirement_analysis",
+                                "attempt": attempt + 1,
+                                "max_retries": max_retries,
+                                "image_count": len(image_paths) if image_paths else 0
+                            }
                         )
                     )
                     
@@ -290,7 +301,12 @@ class ChatManager:
                         summary_response = await self.chat_graph.chat(
                             messages=summary_messages,
                             response_format={"type": "json_object"},
-                            timeout=180  # 3分钟超时
+                            timeout=180,  # 3分钟超时
+                            metadata={
+                                "task_type": "testcase_summary",
+                                "project_name": project_name,
+                                "has_details": bool(details)
+                            }
                         )
                         
                         if summary_response:
@@ -363,7 +379,14 @@ class ChatManager:
             
             logger.debug(f"发送消息到AI:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
             
-            response = await self.chat_graph.chat(messages, response_format={"type": "json_object"})
+            response = await self.chat_graph.chat(
+                messages,
+                response_format={"type": "json_object"},
+                metadata={
+                    "task_type": "requirement_batch",
+                    "batch_type": batch_type
+                }
+            )
             if response:
                 logger.debug(f"收到AI响应:\n{response[:200]}...")
                 # 更新记忆
@@ -440,7 +463,13 @@ class ChatManager:
                         "content": prompt
                     }],
                     response_format={"type": "json_object"},
-                    timeout=180  # 增加超时时间到3分钟
+                    timeout=180,  # 增加超时时间到3分钟
+                    metadata={
+                        "task_type": "testcase_generation",
+                        "batch_type": batch_type,
+                        "attempt": attempt + 1,
+                        "max_retries": retry_count
+                    }
                 )
                 
                 if not response:

@@ -133,10 +133,20 @@ class ZhipuAI:
                     top_p=0.2,
                     streaming=False,
                     timeout=timeout_config,
-                    max_retries=3
+                    max_retries=3,
+                    callbacks=config.get("callbacks", []) if config else None,
+                    tags=config.get("tags", ["testboom"]) if config else None
                 )
             else:
-                chat_model = self.chat_model
+                chat_model = ChatZhipuAI(
+                    api_key=settings.ai.AI_ZHIPU_API_KEY,
+                    model_name=settings.ai.AI_ZHIPU_MODEL_CHAT,
+                    temperature=0.2,
+                    top_p=0.2,
+                    streaming=False,
+                    callbacks=config.get("callbacks", []) if config else None,
+                    tags=config.get("tags", ["testboom"]) if config else None
+                )
             
             # 使用chat_model发送请求
             try:
@@ -238,8 +248,19 @@ class ZhipuAI:
                 
                 logger.debug(f"发送图片分析请求: {path}")
                 try:
+                    # 创建新的vision_model实例，包含callbacks和tags
+                    vision_model = ChatZhipuAI(
+                        api_key=settings.ai.AI_ZHIPU_API_KEY,
+                        model_name=settings.ai.AI_ZHIPU_MODEL_VISION,
+                        temperature=0.2,
+                        top_p=0.2,
+                        streaming=False,
+                        callbacks=config.get("callbacks", []) if config else None,
+                        tags=config.get("tags", ["testboom", "vision"]) if config else None
+                    )
+                    
                     # 使用vision_model处理请求
-                    response = await self.vision_model.ainvoke(
+                    response = await vision_model.ainvoke(
                         [HumanMessage(content=multimodal_content)],
                         response_format={"type": "json_object"},
                         config=config  # 添加配置

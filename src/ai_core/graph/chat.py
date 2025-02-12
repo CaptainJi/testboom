@@ -10,6 +10,9 @@ from src.ai_core.zhipu_api import ZhipuAI
 from src.ai_core.prompt_template import PromptTemplate
 from src.config.settings import settings
 from pathlib import Path
+import uuid
+from langchain_core.runnables import RunnableConfig
+from langchain_core.callbacks import BaseCallbackHandler
 
 class ChatState(TypedDict):
     messages: List[Dict[str, str]]
@@ -45,27 +48,48 @@ class ChatGraph:
         # 编译图
         self.workflow = self.graph.compile()
 
-    def get_config(self, response_format=None, timeout=None, callbacks=None, tags=None, metadata=None):
-        """获取配置信息
-        
+    def get_config(
+        self,
+        response_format: str = "text",
+        timeout: int = 60,
+        callbacks: List[BaseCallbackHandler] = None,
+        tags: List[str] = None,
+        metadata: Dict[str, Any] = None,
+    ) -> RunnableConfig:
+        """获取配置
+
         Args:
-            response_format: 响应格式
-            timeout: 超时时间
-            callbacks: 回调函数列表
-            tags: 标签列表
-            metadata: 元数据
-            
+            response_format (str, optional): 响应格式. Defaults to "text".
+            timeout (int, optional): 超时时间. Defaults to 60.
+            callbacks (List[BaseCallbackHandler], optional): 回调函数列表. Defaults to None.
+            tags (List[str], optional): 标签列表. Defaults to None.
+            metadata (Dict[str, Any], optional): 元数据. Defaults to None.
+
         Returns:
-            dict: 配置信息
+            RunnableConfig: 配置字典
         """
+        # 基础配置
         config = {
-            "response_format": response_format,
-            "timeout": timeout,
+            "configurable": {
+                "response_format": response_format,
+                "timeout": timeout,
+                "run_name": str(uuid.uuid4()),
+            },
+            "metadata": {
+                "template_name": "chat",
+                "response_format": response_format,
+                "timeout": timeout,
+            },
+            "tags": tags or ["testboom", "chat"],
             "callbacks": callbacks or [],
-            "tags": tags or ["testboom"],
-            "metadata": metadata or {},
-            "tracing_enabled": settings.ai.LANGSMITH_TRACING_ENABLED
+            "recursion_limit": 25,  # 防止无限递归
+            "run_name": f"testboom-chat-{uuid.uuid4()}",  # 确保每次运行都有唯一的名称
         }
+
+        # 合并额外的元数据
+        if metadata:
+            config["metadata"].update(metadata)
+
         return config
 
     async def _process_message(self, state: ChatState) -> ChatState:
@@ -168,9 +192,22 @@ class ChatGraph:
         template_name: str = None,
         template_args: Dict[str, Any] = None,
         response_format: Dict[str, str] = None,
-        timeout: int = None
+        timeout: int = None,
+        metadata: Dict[str, Any] = None
     ) -> str:
-        """聊天入口"""
+        """聊天入口
+
+        Args:
+            messages: 消息列表
+            template_name: 模板名称
+            template_args: 模板参数
+            response_format: 响应格式
+            timeout: 超时时间
+            metadata: 元数据
+
+        Returns:
+            str: 响应内容
+        """
         try:
             # 准备初始状态
             state: ChatState = {
@@ -190,7 +227,14 @@ class ChatGraph:
                 state["timeout"] = timeout
                 
             # 执行工作流
-            result = await self.workflow.ainvoke(state)
+            result = await self.workflow.ainvoke(
+                state,
+                config=self.get_config(
+                    response_format=response_format,
+                    timeout=timeout,
+                    metadata=metadata
+                )
+            )
             
             if result.get("error"):
                 logger.error(f"聊天失败: {result['error']}")

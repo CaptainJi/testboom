@@ -6,6 +6,7 @@ import pytest
 import asyncio
 from src.ai_core.graph.chat import ChatGraph
 from src.config.settings import settings
+from src.ai_core.graph.base import BaseGraph
 
 @pytest.mark.asyncio
 async def test_chat_basic():
@@ -121,10 +122,44 @@ async def test_chat_with_system_message():
     assert isinstance(response, str)
     assert response.strip().startswith("{")
 
+@pytest.mark.asyncio
+async def test_chat_with_tracing():
+    """测试带追踪的对话功能"""
+    # 初始化 LangSmith
+    base = BaseGraph()  # 这会初始化 LangSmith
+    
+    chat_graph = ChatGraph()
+    
+    messages = [{
+        "role": "user",
+        "content": "你好，请用JSON格式回答：1. 你是谁？2. 你能做什么？"
+    }]
+    
+    # 使用JSON格式以便于验证响应
+    response = await chat_graph.chat(
+        messages=messages,
+        response_format={"type": "json_object"},
+        timeout=30,
+        metadata={
+            "test_name": "chat_with_tracing",
+            "test_type": "integration",
+            "test_purpose": "验证LangSmith追踪功能"
+        }
+    )
+    
+    assert response is not None
+    assert isinstance(response, str)
+    assert response.strip().startswith("{")
+    assert response.strip().endswith("}")
+    
+    # 等待一段时间确保追踪完成
+    await asyncio.sleep(2)
+
 if __name__ == "__main__":
     asyncio.run(test_chat_basic())
     asyncio.run(test_chat_with_template())
     asyncio.run(test_chat_with_json_response())
     asyncio.run(test_chat_with_timeout())
     asyncio.run(test_chat_with_error())
-    asyncio.run(test_chat_with_system_message()) 
+    asyncio.run(test_chat_with_system_message())
+    asyncio.run(test_chat_with_tracing()) 

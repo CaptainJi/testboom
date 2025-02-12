@@ -22,6 +22,18 @@ class AIConfig(BaseSettings):
     AI_RETRY_DELAY: int = Field(5, description="重试延迟(秒)")
     AI_RETRY_BACKOFF: float = Field(2.0, description="重试延迟倍数")
     
+    # LangSmith配置
+    LANGSMITH_API_KEY: str = Field("", description="LangSmith API密钥")
+    LANGSMITH_PROJECT: str = Field("testboom", description="LangSmith项目名称")
+    LANGSMITH_ENDPOINT: str = Field(
+        "https://api.smith.langchain.com",
+        description="LangSmith API端点"
+    )
+    LANGSMITH_TRACING_ENABLED: bool = Field(
+        False, 
+        description="是否启用LangSmith追踪"
+    )
+    
     model_config = ConfigDict(
         env_file="",  # 禁用环境变量文件
         env_prefix="",  # 不使用前缀，因为属性名已包含前缀

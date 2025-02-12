@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any, Callable
-from .zhipu_api import ZhipuAI
+from .graph.chat import ChatGraph
 from .prompt_template import PromptTemplate
 from src.logger.logger import logger
 from src.utils.decorators import handle_exceptions
@@ -66,7 +66,7 @@ class ChatManager:
     
     def __init__(self):
         """初始化对话管理器"""
-        self.ai = ZhipuAI()
+        self.chat_graph = ChatGraph()
         self.template = PromptTemplate()
         self.memory = ChatMemory()
 
@@ -153,14 +153,17 @@ class ChatManager:
             
             logger.debug(f"发送消息到AI:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
             
-            # 发送请求，最多重试3次
+            # 使用新的chat_graph发送请求
             response = None
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     response = await (
-                        self.ai.chat_with_images(messages, image_paths) if image_paths
-                        else self.ai.chat(messages, response_format={"type": "json_object"})
+                        self.chat_graph.chat(
+                            messages=messages,
+                            response_format={"type": "json_object"},
+                            timeout=180  # 3分钟超时
+                        )
                     )
                     
                     if not response:
@@ -273,12 +276,12 @@ class ChatManager:
                             "content": summary_prompt
                         }]
                         
-                        # 使用普通大模型进行总结
-                        logger.info("使用普通大模型生成总结")
-                        summary_response = await self.ai.chat(
-                            summary_messages,
+                        # 使用chat_graph生成总结
+                        logger.info("使用chat_graph生成总结")
+                        summary_response = await self.chat_graph.chat(
+                            messages=summary_messages,
                             response_format={"type": "json_object"},
-                            timeout=180  # 减少到3分钟，因为是文本处理
+                            timeout=180  # 3分钟超时
                         )
                         
                         if summary_response:
@@ -351,7 +354,7 @@ class ChatManager:
             
             logger.debug(f"发送消息到AI:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
             
-            response = await self.ai.chat(messages, response_format={"type": "json_object"})
+            response = await self.chat_graph.chat(messages, response_format={"type": "json_object"})
             if response:
                 logger.debug(f"收到AI响应:\n{response[:200]}...")
                 # 更新记忆
@@ -419,7 +422,7 @@ class ChatManager:
                 )
                 
                 # 发送请求
-                response = await self.ai.chat(
+                response = await self.chat_graph.chat(
                     [{
                         "role": "system",
                         "content": f"你是测试专家，请专注于{batch_type}相关的测试用例生成。"

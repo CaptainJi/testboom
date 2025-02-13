@@ -22,8 +22,20 @@ class AIConfig(BaseSettings):
     AI_RETRY_DELAY: int = Field(5, description="重试延迟(秒)")
     AI_RETRY_BACKOFF: float = Field(2.0, description="重试延迟倍数")
     
+    # LangSmith配置
+    LANGSMITH_API_KEY: str = Field("", description="LangSmith API密钥")
+    LANGSMITH_PROJECT: str = Field("testboom", description="LangSmith项目名称")
+    LANGSMITH_ENDPOINT: str = Field(
+        "https://api.smith.langchain.com",
+        description="LangSmith API端点"
+    )
+    LANGSMITH_TRACING: bool = Field(
+        False, 
+        description="是否启用LangSmith追踪"
+    )
+    
     model_config = ConfigDict(
-        env_file="",  # 禁用环境变量文件
+        env_file=".env",  # 启用环境变量文件
         env_prefix="",  # 不使用前缀，因为属性名已包含前缀
         extra="ignore",
         case_sensitive=True
@@ -144,8 +156,15 @@ class Settings(BaseSettings):
         # 更新配置
         if env_config:
             # 更新 AI 配置
-            ai_config = {k: v for k, v in env_config.items() if k.startswith('AI_')}
+            ai_config = {
+                k: v for k, v in env_config.items() 
+                if k.startswith('AI_') or k.startswith('LANGSMITH_') or k.startswith('LANGCHAIN_')
+            }
             if ai_config:
+                # 处理布尔值
+                for key in ['LANGSMITH_TRACING', 'LANGCHAIN_TRACING_V2']:
+                    if key in ai_config:
+                        ai_config[key] = ai_config[key].lower() == 'true'
                 kwargs['ai'] = AIConfig(**ai_config)
             
             # 更新日志配置
@@ -219,6 +238,13 @@ class Settings(BaseSettings):
         print("\nAI配置:")
         print(f"配置文件 AI_ZHIPU_MODEL_CHAT: {self.ai.AI_ZHIPU_MODEL_CHAT}")
         print(f"配置文件 AI_ZHIPU_MODEL_VISION: {self.ai.AI_ZHIPU_MODEL_VISION}")
+        
+        # LangSmith配置
+        print("\nLangSmith配置:")
+        print(f"追踪功能: {'已启用' if self.ai.LANGSMITH_TRACING else '未启用'}")
+        if self.ai.LANGSMITH_TRACING:
+            print(f"项目名称: {self.ai.LANGSMITH_PROJECT}")
+            print(f"API密钥: ***{self.ai.LANGSMITH_API_KEY[-4:]}")
         
         # 存储配置
         print("\n存储配置:")

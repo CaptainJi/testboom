@@ -92,7 +92,8 @@ class ZhipuAI:
         self,
         messages: List[Dict[str, str]],
         response_format: Optional[Dict[str, str]] = None,
-        timeout: Optional[int] = None
+        timeout: Optional[int] = None,
+        config: Optional[Dict[str, Any]] = None  # 添加配置参数
     ) -> Optional[str]:
         """发送聊天请求
         
@@ -100,6 +101,7 @@ class ZhipuAI:
             messages: 消息列表
             response_format: 响应格式
             timeout: 超时时间（秒）
+            config: 配置参数
             
         Returns:
             Optional[str]: 响应内容
@@ -131,16 +133,27 @@ class ZhipuAI:
                     top_p=0.2,
                     streaming=False,
                     timeout=timeout_config,
-                    max_retries=3
+                    max_retries=3,
+                    callbacks=config.get("callbacks", []) if config else None,
+                    tags=config.get("tags", ["testboom"]) if config else None
                 )
             else:
-                chat_model = self.chat_model
+                chat_model = ChatZhipuAI(
+                    api_key=settings.ai.AI_ZHIPU_API_KEY,
+                    model_name=settings.ai.AI_ZHIPU_MODEL_CHAT,
+                    temperature=0.2,
+                    top_p=0.2,
+                    streaming=False,
+                    callbacks=config.get("callbacks", []) if config else None,
+                    tags=config.get("tags", ["testboom"]) if config else None
+                )
             
             # 使用chat_model发送请求
             try:
                 response = await chat_model.ainvoke(
                     langchain_messages,
-                    response_format=response_format if response_format else None
+                    response_format=response_format if response_format else None,
+                    config=config  # 添加配置
                 )
                 
                 # 提取响应内容
@@ -186,50 +199,38 @@ class ZhipuAI:
     async def chat_with_images(
         self, 
         messages: List[Dict[str, Any]], 
-        image_paths: List[str]
+        image_paths: List[str],
+        task_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None  # 添加配置参数
     ) -> Optional[str]:
         """发送带图片的对话请求"""
+        
         try:
-            logger.info(f"开始处理图片对话请求，使用模型: {self.vision_model.model_name}")
-            
-            prompt = self.prompt_template.render("image_analysis")
-            if not prompt:
-                logger.error("获取图片分析提示词失败")
-                return None
-                
-            all_results = []
             total_images = len(image_paths)
-            logger.info(f"共需处理 {total_images} 张图片")
+            logger.info(f"开始处理 {total_images} 张图片")
+            
+            prompt = messages[0]["content"] if messages else ""
+            processed_images = []
             
             for index, path in enumerate(image_paths, 1):
                 logger.info(f"正在处理第 {index}/{total_images} 张图片: {path}")
                 
                 # 更新任务进度
-                try:
-                    # 查找正在运行的生成用例任务
-                    async with AsyncSessionLocal() as session:
-                        result = await session.execute(
-                            select(Task).where(
-                                Task.type == 'generate_cases',
-                                Task.status == 'running'
-                            )
-                        )
-                        task = result.scalar_one_or_none()
+                if task_id:
+                    try:
+                        progress_msg = f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片"
+                        logger.debug(f"更新任务进度 - TaskID: {task_id}, Progress: {progress_msg}")
                         
-                        if task:
-                            progress_msg = f"{self.vision_model.model_name}正在处理第 {index}/{total_images} 张图片"
-                            logger.debug(f"更新任务进度 - TaskID: {task.id}, Progress: {progress_msg}")
-                            
-                            await TaskManager.update_task(
-                                task.id,
-                                result={
-                                    'progress': progress_msg,
-                                    'current': index,
-                                    'total': total_images
-                                }
-                            )
-                except Exception as e:
-                    logger.error(f"更新任务进度失败: {str(e)}")
+                        await TaskManager.update_task(
+                            task_id,
+                            result={
+                                'progress': progress_msg,
+                                'current': index,
+                                'total': total_images
+                            }
+                        )
+                    except Exception as e:
+                        logger.error(f"更新任务进度失败: {str(e)}")
                 
                 image_content = self._process_image(path)
                 if not image_content:
@@ -247,10 +248,22 @@ class ZhipuAI:
                 
                 logger.debug(f"发送图片分析请求: {path}")
                 try:
+                    # 创建新的vision_model实例，包含callbacks和tags
+                    vision_model = ChatZhipuAI(
+                        api_key=settings.ai.AI_ZHIPU_API_KEY,
+                        model_name=settings.ai.AI_ZHIPU_MODEL_VISION,
+                        temperature=0.2,
+                        top_p=0.2,
+                        streaming=False,
+                        callbacks=config.get("callbacks", []) if config else None,
+                        tags=config.get("tags", ["testboom", "vision"]) if config else None
+                    )
+                    
                     # 使用vision_model处理请求
-                    response = await self.vision_model.ainvoke(
+                    response = await vision_model.ainvoke(
                         [HumanMessage(content=multimodal_content)],
-                        response_format={"type": "json_object"}
+                        response_format={"type": "json_object"},
+                        config=config  # 添加配置
                     )
                     
                     result = response.content if isinstance(response, AIMessage) else response
@@ -259,7 +272,7 @@ class ZhipuAI:
                         parsed_result = safe_json_loads(result)
                         if parsed_result:
                             logger.debug(f"解析结果成功:\n{json.dumps(parsed_result, ensure_ascii=False, indent=2)}")
-                            all_results.append(parsed_result)
+                            processed_images.append(parsed_result)
                         else:
                             logger.warning(f"解析响应失败: {result}")
                     else:
@@ -272,14 +285,14 @@ class ZhipuAI:
                     logger.error(f"处理图片 {path} 失败: {str(e)}")
                     continue
             
-            if not all_results:
+            if not processed_images:
                 logger.error("没有成功处理任何图片")
                 return None
                 
-            logger.info(f"成功处理 {len(all_results)}/{total_images} 张图片")
+            logger.info(f"成功处理 {len(processed_images)}/{total_images} 张图片")
             
             # 直接返回第一个结果
-            return json.dumps(all_results[0], ensure_ascii=False)
+            return json.dumps(processed_images[0], ensure_ascii=False)
                 
         except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
             logger.error(f"请求超时: {str(e)}")

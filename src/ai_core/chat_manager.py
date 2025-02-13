@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any, Callable
-from .zhipu_api import ZhipuAI
+from .graph.chat import ChatGraph
 from .prompt_template import PromptTemplate
 from src.logger.logger import logger
 from src.utils.decorators import handle_exceptions
@@ -12,6 +12,7 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from pydantic import Field
 import json
 import asyncio
+from .graph.base import BaseGraph
 
 class ChatMemory(BaseMemory):
     """自定义聊天记忆管理"""
@@ -66,7 +67,11 @@ class ChatManager:
     
     def __init__(self):
         """初始化对话管理器"""
-        self.ai = ZhipuAI()
+        # 初始化 LangSmith
+        self.base_graph = BaseGraph()  # 这会初始化 LangSmith
+        
+        # 初始化其他组件
+        self.chat_graph = ChatGraph()
         self.template = PromptTemplate()
         self.memory = ChatMemory()
 
@@ -153,20 +158,42 @@ class ChatManager:
             
             logger.debug(f"发送消息到AI:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
             
-            # 发送请求，最多重试3次
+            # 使用新的chat_graph发送请求
             response = None
+            result = None
             max_retries = 3
+            
             for attempt in range(max_retries):
                 try:
+                    # 更新进度
+                    if progress_callback:
+                        await progress_callback(attempt + 1, max_retries)
+                        
                     response = await (
-                        self.ai.chat_with_images(messages, image_paths) if image_paths
-                        else self.ai.chat(messages, response_format={"type": "json_object"})
+                        self.chat_graph.chat(
+                            messages=messages,
+                            response_format={"type": "json_object"},
+                            timeout=180,  # 3分钟超时
+                            metadata={
+                                "task_type": "requirement_analysis",
+                                "attempt": attempt + 1,
+                                "max_retries": max_retries,
+                                "image_count": len(image_paths) if image_paths else 0
+                            }
+                        )
                     )
                     
                     if not response:
                         logger.warning(f"第{attempt + 1}次尝试未收到响应")
                         continue
                         
+                    # 尝试提取JSON内容
+                    if "```json" in response:
+                        import re
+                        json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+                        if json_match:
+                            response = json_match.group(1)
+                    
                     # 尝试解析JSON
                     result = safe_json_loads(response)
                     if result:
@@ -180,10 +207,6 @@ class ChatManager:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2)  # 等待2秒后重试
                     continue
-                
-                # 更新进度
-                if progress_callback:
-                    progress_callback(attempt + 1, max_retries)
             
             if not response or not result:
                 logger.error("需求分析失败：未能获取有效响应")
@@ -273,12 +296,17 @@ class ChatManager:
                             "content": summary_prompt
                         }]
                         
-                        # 使用普通大模型进行总结
-                        logger.info("使用普通大模型生成总结")
-                        summary_response = await self.ai.chat(
-                            summary_messages,
+                        # 使用chat_graph生成总结
+                        logger.info("使用chat_graph生成总结")
+                        summary_response = await self.chat_graph.chat(
+                            messages=summary_messages,
                             response_format={"type": "json_object"},
-                            timeout=180  # 减少到3分钟，因为是文本处理
+                            timeout=180,  # 3分钟超时
+                            metadata={
+                                "task_type": "testcase_summary",
+                                "project_name": project_name,
+                                "has_details": bool(details)
+                            }
                         )
                         
                         if summary_response:
@@ -351,7 +379,14 @@ class ChatManager:
             
             logger.debug(f"发送消息到AI:\n{json.dumps(messages, ensure_ascii=False, indent=2)}")
             
-            response = await self.ai.chat(messages, response_format={"type": "json_object"})
+            response = await self.chat_graph.chat(
+                messages,
+                response_format={"type": "json_object"},
+                metadata={
+                    "task_type": "requirement_batch",
+                    "batch_type": batch_type
+                }
+            )
             if response:
                 logger.debug(f"收到AI响应:\n{response[:200]}...")
                 # 更新记忆
@@ -419,7 +454,7 @@ class ChatManager:
                 )
                 
                 # 发送请求
-                response = await self.ai.chat(
+                response = await self.chat_graph.chat(
                     [{
                         "role": "system",
                         "content": f"你是测试专家，请专注于{batch_type}相关的测试用例生成。"
@@ -428,7 +463,13 @@ class ChatManager:
                         "content": prompt
                     }],
                     response_format={"type": "json_object"},
-                    timeout=180  # 增加超时时间到3分钟
+                    timeout=180,  # 增加超时时间到3分钟
+                    metadata={
+                        "task_type": "testcase_generation",
+                        "batch_type": batch_type,
+                        "attempt": attempt + 1,
+                        "max_retries": retry_count
+                    }
                 )
                 
                 if not response:
